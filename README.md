@@ -288,10 +288,10 @@ python -m uvicorn api.main:app --app-dir AgentOS --reload
 
 ## GitHub Repository Setup
 
-From the workspace root:
+From the repository root:
 
 ```powershell
-cd E:\OS
+cd E:\OS\AgentOS
 git init
 git add .
 git status
