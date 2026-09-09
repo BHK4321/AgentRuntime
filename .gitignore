@@ -1,0 +1,48 @@
+# CMake and Visual Studio build output
+build/
+build-postgres/
+build-grpc/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/*.vcxproj
+**/*.vcxproj.filters
+**/*.sln
+**/*.dir/
+**/Testing/
+**/Debug/
+**/Release/
+**/*.exe
+**/*.pdb
+**/*.ilk
+**/*.obj
+**/*.lib
+**/*.exp
+
+# Python environments, caches, and test artifacts
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Generated protobuf and gRPC bindings
+api/generated/
+
+# Local runtime and environment files
+*.events
+*.eventlog
+.env
+.env.*
+!*.env.example
+
+# Editor and OS metadata
+.vscode/
+.vs/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

@@ -1,0 +1,9 @@
+benchmark,workers,tasks,elapsed_ms,tasks_per_second,maximum_parallelism
+parallel,1,5000,78239.1,63.9067,1
+parallel,2,5000,38974.7,128.288,2
+parallel,4,5000,19449,257.082,4
+parallel,8,5000,9757.19,512.443,8
+parallel,16,5000,4863.91,1027.98,16
+dynamic,4,5000,19452.5,257.036,
+batch,16,5000,4872.43,1026.18,
+retry,2,1,49.1979,,

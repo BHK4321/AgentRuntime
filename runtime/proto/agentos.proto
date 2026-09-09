@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package agentos;
+
+service Runtime {
+  rpc SubmitWorkflow (SubmitWorkflowRequest) returns (SubmitWorkflowResponse);
+  rpc CancelTask (CancelTaskRequest) returns (TaskStatus);
+}
+
+message TaskDefinition {
+  string id = 1;
+  string type = 2;
+  string payload_json = 3;
+  repeated string dependencies = 4;
+  uint32 max_attempts = 5;
+  uint64 retry_delay_ms = 6;
+  uint64 deadline_ms = 7;
+  bool idempotent = 8;
+  string idempotency_key = 9;
+}
+
+message SubmitWorkflowRequest {
+  repeated TaskDefinition tasks = 1;
+}
+
+message SubmitWorkflowResponse {
+  repeated string task_ids = 1;
+}
+
+message CancelTaskRequest {
+  string task_id = 1;
+}
+
+message TaskStatus {
+  string task_id = 1;
+  string state = 2;
+}
