@@ -3,6 +3,8 @@
 #include "task_graph.hpp"
 #include "event.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <chrono>
@@ -16,6 +18,7 @@
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 class Scheduler {
 public:
@@ -164,14 +167,22 @@ public:
         started_ = false;
     }
 
-    void cancel(const std::string& task_id) {
-        const auto terminal_count = graph_.cancel(task_id);
+    void set_renew_lease_while_running(bool enabled) {
+        renew_lease_while_running_.store(enabled);
+    }
+
+    std::string cancel(const std::string& task_id) {
+        const auto [state, terminal_count] = graph_.cancel(task_id);
         if (terminal_count != 0) {
             std::lock_guard lock(mutex_);
             pending_ -= terminal_count;
         }
         emit(EventType::TaskCancelled, task_id);
+        if (state == TaskState::Blocked) {
+            emit(EventType::TaskBlocked, task_id);
+        }
         condition_.notify_all();
+        return task_state_name(state);
     }
 
 private:
@@ -183,6 +194,11 @@ private:
             throw std::invalid_argument("task has no executable work: " + task.id);
         }
     }
+
+    struct Assignment {
+        std::string task_id;
+        std::uint64_t run_token = 0;
+    };
 
     struct RetryEntry {
         std::chrono::steady_clock::time_point retry_at;
@@ -212,8 +228,21 @@ private:
             std::string task_id;
             Task::Work work;
             TaskContext context;
-            if (graph_.try_take_ready(task_id, work, context)) {
-                execute(task_id, std::move(work), context, worker_id);
+            std::uint64_t run_token = 0;
+            if (graph_.try_take_ready(task_id, work, context, run_token)) {
+                {
+                    std::lock_guard lock(mutex_);
+                    running_by_worker_[worker_id] = Assignment{task_id, run_token};
+                }
+                execute(task_id, std::move(work), context, worker_id, run_token);
+                {
+                    std::lock_guard lock(mutex_);
+                    const auto assigned = running_by_worker_.find(worker_id);
+                    if (assigned != running_by_worker_.end() &&
+                        assigned->second.run_token == run_token) {
+                        running_by_worker_.erase(assigned);
+                    }
+                }
                 continue;
             }
 
@@ -236,23 +265,44 @@ private:
     void lease_monitor_loop() {
         while (true) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            std::vector<std::string> expired;
+            std::vector<std::pair<std::string, Assignment>> expired;
             {
                 std::lock_guard lock(mutex_);
                 if (stopping_) {
                     return;
                 }
                 const auto now = std::chrono::steady_clock::now();
-                for (const auto& [worker_id, heartbeat] : last_heartbeats_) {
-                    if (now - heartbeat > lease_timeout_ &&
-                        !expired_workers_.contains(worker_id)) {
-                        expired_workers_.insert(worker_id);
-                        expired.push_back(worker_id);
+                for (auto& [worker_id, heartbeat] : last_heartbeats_) {
+                    if (now - heartbeat <= lease_timeout_) {
+                        expired_workers_.erase(worker_id);
+                        continue;
                     }
+                    if (expired_workers_.contains(worker_id)) {
+                        continue;
+                    }
+                    expired_workers_.insert(worker_id);
+                    Assignment assignment;
+                    const auto running = running_by_worker_.find(worker_id);
+                    if (running != running_by_worker_.end()) {
+                        assignment = running->second;
+                    }
+                    expired.emplace_back(worker_id, assignment);
                 }
             }
-            for (const auto& worker_id : expired) {
-                emit(EventType::WorkerLeaseExpired, {}, worker_id);
+            for (const auto& [worker_id, assignment] : expired) {
+                emit(EventType::WorkerLeaseExpired, assignment.task_id, worker_id);
+                if (assignment.task_id.empty()) {
+                    continue;
+                }
+                if (!graph_.reclaim_running(assignment.task_id, assignment.run_token)) {
+                    continue;
+                }
+                {
+                    std::lock_guard lock(mutex_);
+                    running_by_worker_.erase(worker_id);
+                }
+                emit(EventType::TaskReclaimed, assignment.task_id, worker_id);
+                condition_.notify_all();
             }
         }
     }
@@ -273,29 +323,36 @@ private:
     }
 
     void execute(const std::string& task_id, Task::Work work,
-                 const TaskContext& context, const std::string& worker_id) {
+                 const TaskContext& context, const std::string& worker_id,
+                 std::uint64_t run_token) {
         emit(EventType::TaskStarted, task_id, worker_id, graph_.idempotency_key(task_id));
         const auto started_at = std::chrono::steady_clock::now();
+        std::atomic<bool> running_work{true};
+        std::thread lease_renewer;
+        if (renew_lease_while_running_.load()) {
+            lease_renewer = std::thread([this, worker_id, &running_work] {
+                while (running_work.load()) {
+                    {
+                        std::lock_guard lock(mutex_);
+                        last_heartbeats_[worker_id] = std::chrono::steady_clock::now();
+                    }
+                    emit(EventType::WorkerHeartbeat, {}, worker_id);
+                    const auto slice = std::min(lease_timeout_ / 3, std::chrono::milliseconds(50));
+                    const auto sleep_for = slice.count() > 0 ? slice : std::chrono::milliseconds(1);
+                    std::this_thread::sleep_for(sleep_for);
+                }
+            });
+        }
         try {
             work(context);
-            if (graph_.deadline_exceeded(task_id, started_at)) {
-                const auto terminal_count = graph_.fail(task_id);
-                {
-                    std::lock_guard lock(mutex_);
-                    if (!failure_) {
-                        failure_ = std::make_exception_ptr(
-                            std::runtime_error("task deadline exceeded: " + task_id));
-                    }
-                    pending_ -= terminal_count;
-                }
-                emit(EventType::TaskTimedOut, task_id);
-                condition_.notify_all();
-                return;
-            } else {
-                graph_.complete(task_id);
-                emit(EventType::TaskCompleted, task_id);
-            }
         } catch (...) {
+            running_work.store(false);
+            if (lease_renewer.joinable()) {
+                lease_renewer.join();
+            }
+            if (!graph_.owns_run(task_id, run_token)) {
+                return;
+            }
             const auto delay = graph_.retry_delay(task_id);
             if (graph_.can_retry(task_id)) {
                 {
@@ -309,7 +366,10 @@ private:
                 return;
             }
 
-            const auto terminal_count = graph_.fail(task_id);
+            const auto terminal_count = graph_.fail(task_id, run_token);
+            if (terminal_count == 0) {
+                return;
+            }
             std::lock_guard lock(mutex_);
             if (!failure_) {
                 failure_ = std::current_exception();
@@ -320,6 +380,45 @@ private:
             return;
         }
 
+        running_work.store(false);
+        if (lease_renewer.joinable()) {
+            lease_renewer.join();
+        }
+
+        if (!graph_.owns_run(task_id, run_token)) {
+            return;
+        }
+        if (context.cancellation && context.cancellation->load()) {
+            const auto terminal_count = graph_.finish_cancelled(task_id, run_token);
+            if (terminal_count != 0) {
+                std::lock_guard lock(mutex_);
+                pending_ -= terminal_count;
+            }
+            emit(EventType::TaskBlocked, task_id);
+            condition_.notify_all();
+            return;
+        }
+        if (graph_.deadline_exceeded(task_id, started_at)) {
+            const auto terminal_count = graph_.fail(task_id, run_token);
+            if (terminal_count == 0) {
+                return;
+            }
+            {
+                std::lock_guard lock(mutex_);
+                if (!failure_) {
+                    failure_ = std::make_exception_ptr(
+                        std::runtime_error("task deadline exceeded: " + task_id));
+                }
+                pending_ -= terminal_count;
+            }
+            emit(EventType::TaskTimedOut, task_id);
+            condition_.notify_all();
+            return;
+        }
+        if (!graph_.complete(task_id, run_token)) {
+            return;
+        }
+        emit(EventType::TaskCompleted, task_id);
         {
             std::lock_guard lock(mutex_);
             --pending_;
@@ -355,4 +454,6 @@ private:
     std::thread lease_monitor_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_heartbeats_;
     std::unordered_set<std::string> expired_workers_;
+    std::unordered_map<std::string, Assignment> running_by_worker_;
+    std::atomic<bool> renew_lease_while_running_{true};
 };

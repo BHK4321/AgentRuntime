@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 class TaskGraph {
@@ -75,7 +76,8 @@ public:
         }
     }
 
-    bool try_take_ready(std::string& task_id, Task::Work& work, TaskContext& context) {
+    bool try_take_ready(std::string& task_id, Task::Work& work, TaskContext& context,
+                        std::uint64_t& run_token) {
         std::lock_guard lock(mutex_);
         if (ready_.empty()) {
             return false;
@@ -85,6 +87,8 @@ public:
         Task& task = tasks_.at(task_id);
         task.state = TaskState::Running;
         ++task.attempts;
+        ++task.run_token;
+        run_token = task.run_token;
         work = task.work;
         context = TaskContext{
             task.id, task.attempts, task.idempotency_key, task.cancellation};
@@ -109,7 +113,7 @@ public:
         ready_.push(task_id);
     }
 
-    std::size_t cancel(const std::string& task_id) {
+    std::pair<TaskState, std::size_t> cancel(const std::string& task_id) {
         std::lock_guard lock(mutex_);
         std::size_t terminal_count = 0;
         Task& task = tasks_.at(task_id);
@@ -119,7 +123,34 @@ public:
         if (task.state == TaskState::Waiting || task.state == TaskState::Ready) {
             mark_blocked(task_id, terminal_count);
         }
-        return terminal_count;
+        return {task.state, terminal_count};
+    }
+
+    bool reclaim_running(const std::string& task_id, std::uint64_t run_token) {
+        std::lock_guard lock(mutex_);
+        auto task_it = tasks_.find(task_id);
+        if (task_it == tasks_.end()) {
+            return false;
+        }
+        Task& task = task_it->second;
+        if (task.state != TaskState::Running || task.run_token != run_token) {
+            return false;
+        }
+        ++task.run_token;
+        if (task.attempts > 0) {
+            --task.attempts;
+        }
+        task.state = TaskState::Waiting;
+        ready_.push(task_id);
+        return true;
+    }
+
+    bool owns_run(const std::string& task_id, std::uint64_t run_token) const {
+        std::lock_guard lock(mutex_);
+        const auto task_it = tasks_.find(task_id);
+        return task_it != tasks_.end() &&
+               task_it->second.state == TaskState::Running &&
+               task_it->second.run_token == run_token;
     }
 
     bool deadline_exceeded(
@@ -131,9 +162,13 @@ public:
                std::chrono::steady_clock::now() - started_at >= deadline;
     }
 
-    void complete(const std::string& task_id) {
+    bool complete(const std::string& task_id, std::uint64_t run_token) {
         std::lock_guard lock(mutex_);
-        tasks_.at(task_id).state = TaskState::Completed;
+        Task& task = tasks_.at(task_id);
+        if (task.state != TaskState::Running || task.run_token != run_token) {
+            return false;
+        }
+        task.state = TaskState::Completed;
         for (const auto& dependent : dependents_[task_id]) {
             const auto dependent_state = tasks_.at(dependent).state;
             if (dependent_state != TaskState::Waiting &&
@@ -144,13 +179,38 @@ public:
                 ready_.push(dependent);
             }
         }
+        return true;
     }
 
-    std::size_t fail(const std::string& task_id) {
+    std::size_t fail(const std::string& task_id, std::uint64_t run_token) {
         std::lock_guard lock(mutex_);
+        Task& task = tasks_.at(task_id);
+        if (task.state != TaskState::Running || task.run_token != run_token) {
+            return 0;
+        }
         std::size_t terminal_count = 0;
         mark_failed(task_id, terminal_count);
         return terminal_count;
+    }
+
+    std::size_t finish_cancelled(const std::string& task_id, std::uint64_t run_token) {
+        std::lock_guard lock(mutex_);
+        Task& task = tasks_.at(task_id);
+        if (task.state != TaskState::Running || task.run_token != run_token) {
+            return 0;
+        }
+        std::size_t terminal_count = 0;
+        task.state = TaskState::Blocked;
+        ++terminal_count;
+        for (const auto& dependent : dependents_[task_id]) {
+            mark_blocked(dependent, terminal_count);
+        }
+        return terminal_count;
+    }
+
+    TaskState state_of(const std::string& task_id) const {
+        std::lock_guard lock(mutex_);
+        return tasks_.at(task_id).state;
     }
 
     bool is_terminal(const std::string& task_id) const {

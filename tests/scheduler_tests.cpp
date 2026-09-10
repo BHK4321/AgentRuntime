@@ -367,20 +367,71 @@ void test_pending_task_can_be_cancelled() {
 void test_worker_lease_expiry_is_reported() {
     TaskGraph graph;
     std::atomic lease_expired{false};
+    std::atomic reclaimed{false};
+    std::atomic started{0};
     Scheduler scheduler(graph, 1, [&](const RuntimeEvent& event) {
         if (event.type == EventType::WorkerLeaseExpired) {
             lease_expired = true;
+        } else if (event.type == EventType::TaskReclaimed) {
+            reclaimed = true;
+        } else if (event.type == EventType::TaskStarted) {
+            ++started;
         }
-    }, std::chrono::milliseconds(5));
+    }, std::chrono::milliseconds(15));
+    scheduler.set_renew_lease_while_running(false);
 
     scheduler.start();
     scheduler.submit(Task{"A", {}, [] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
     }});
     scheduler.wait_until_idle();
     scheduler.shutdown();
 
     assert(lease_expired);
+    assert(reclaimed);
+    assert(started >= 2);
+}
+
+void test_lease_renewal_prevents_false_reclaim() {
+    TaskGraph graph;
+    std::atomic reclaimed{false};
+    std::atomic started{0};
+    Scheduler scheduler(graph, 1, [&](const RuntimeEvent& event) {
+        if (event.type == EventType::TaskReclaimed) {
+            reclaimed = true;
+        } else if (event.type == EventType::TaskStarted) {
+            ++started;
+        }
+    }, std::chrono::milliseconds(15));
+
+    scheduler.start();
+    scheduler.submit(Task{"A", {}, [] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    }});
+    scheduler.wait_until_idle();
+    scheduler.shutdown();
+
+    assert(!reclaimed);
+    assert(started == 1);
+}
+
+void test_cancel_reports_actual_state() {
+    TaskGraph graph;
+    Scheduler scheduler(graph, 1);
+    scheduler.start();
+    scheduler.submit(Task{"A", {}, [] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    }});
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    scheduler.submit(Task{"B", {"A"}, [] {}});
+    const auto waiting_state = scheduler.cancel("B");
+    assert(waiting_state == std::string("Blocked"));
+    const auto running_state = scheduler.cancel("A");
+    assert(running_state == std::string("Running"));
+    scheduler.wait_until_idle();
+    scheduler.shutdown();
+    assert(graph.state_of("A") == TaskState::Blocked);
+    assert(graph.state_of("B") == TaskState::Blocked);
 }
 
 void test_optional_idempotency_key_is_reused_in_events() {
@@ -470,6 +521,72 @@ void test_durable_event_store_replays_after_reopen() {
     std::filesystem::remove(path);
 }
 
+#ifdef AGENTOS_ENABLE_POSTGRES
+#include "postgres_runtime_store.hpp"
+#include "task_recovery.hpp"
+#include "task_handler_registry.hpp"
+
+#include <cstdlib>
+#include <pqxx/pqxx>
+
+const char* postgres_test_url() {
+    return std::getenv("AGENTOS_DATABASE_URL");
+}
+
+void cleanup_postgres_prefix(pqxx::connection& connection, const std::string& prefix) {
+    pqxx::work transaction(connection);
+    transaction.exec(
+        "DELETE FROM executions WHERE task_id LIKE " + transaction.quote(prefix + "%"));
+    transaction.exec(
+        "DELETE FROM task_dependencies WHERE task_id LIKE " + transaction.quote(prefix + "%") +
+        " OR dependency_id LIKE " + transaction.quote(prefix + "%"));
+    transaction.exec(
+        "DELETE FROM runtime_events WHERE task_id LIKE " + transaction.quote(prefix + "%"));
+    transaction.exec("DELETE FROM tasks WHERE id LIKE " + transaction.quote(prefix + "%"));
+    transaction.commit();
+}
+
+void test_postgres_recovery_resumes_sleep_task() {
+    const auto* url = postgres_test_url();
+    if (url == nullptr || *url == '\0') {
+        std::cout << "Skipped postgres_recovery (AGENTOS_DATABASE_URL unset)\n";
+        return;
+    }
+
+    const auto prefix = "gtest-recovery-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto task_id = prefix + "-a";
+    pqxx::connection connection(url);
+    cleanup_postgres_prefix(connection, prefix);
+
+    PostgresRuntimeStore store(url);
+    Task task;
+    task.id = task_id;
+    task.type = "sleep";
+    task.payload_json = "{\"seconds\":0}";
+    store.persist_task(task);
+
+    TaskGraph graph;
+    TaskHandlerRegistry handlers;
+    handlers.register_handler("sleep", [](const std::string&, const TaskContext&) {});
+    restore_runtime_graph(graph, store, handlers);
+    Scheduler scheduler(graph, 1, [&store](const RuntimeEvent& event) {
+        store.append(event);
+    }, std::chrono::seconds(5), {}, {}, [&handlers](const Task& recovered) {
+        return handlers.resolve(recovered);
+    });
+    scheduler.start();
+    scheduler.wait_until_idle();
+    scheduler.shutdown();
+
+    pqxx::read_transaction read(connection);
+    const auto row = read.exec_params("SELECT state FROM tasks WHERE id = $1", task_id);
+    assert(!row.empty());
+    assert(row[0][0].as<std::string>() == "Completed");
+    cleanup_postgres_prefix(connection, prefix);
+}
+#endif
+
 int main(int argc, char* argv[]) {
     if (argc == 1) {
         test_dependency_order();
@@ -487,9 +604,14 @@ int main(int argc, char* argv[]) {
         test_deadline_reports_failure();
         test_pending_task_can_be_cancelled();
         test_worker_lease_expiry_is_reported();
+        test_lease_renewal_prevents_false_reclaim();
+        test_cancel_reports_actual_state();
         test_optional_idempotency_key_is_reused_in_events();
         test_context_work_receives_runtime_context();
         test_durable_event_store_replays_after_reopen();
+#ifdef AGENTOS_ENABLE_POSTGRES
+        test_postgres_recovery_resumes_sleep_task();
+#endif
         std::cout << "All AgentOS tests passed\n";
         return 0;
     }
@@ -525,12 +647,22 @@ int main(int argc, char* argv[]) {
         test_pending_task_can_be_cancelled();
     } else if (test_name == "lease_expiry") {
         test_worker_lease_expiry_is_reported();
+    } else if (test_name == "lease_reclaim") {
+        test_worker_lease_expiry_is_reported();
+    } else if (test_name == "lease_renewal") {
+        test_lease_renewal_prevents_false_reclaim();
+    } else if (test_name == "cancel_state") {
+        test_cancel_reports_actual_state();
     } else if (test_name == "idempotency") {
         test_optional_idempotency_key_is_reused_in_events();
     } else if (test_name == "task_context") {
         test_context_work_receives_runtime_context();
     } else if (test_name == "durable_events") {
         test_durable_event_store_replays_after_reopen();
+#ifdef AGENTOS_ENABLE_POSTGRES
+    } else if (test_name == "postgres_recovery") {
+        test_postgres_recovery_resumes_sleep_task();
+#endif
     } else {
         std::cerr << "Unknown test: " << test_name << '\n';
         return 1;

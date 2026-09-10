@@ -68,14 +68,37 @@ if(AGENTOS_ENABLE_GRPC)
         ${AGENTOS_PROTO_DIR}/agentos.grpc.pb.cc
     )
     target_include_directories(agentos_server PRIVATE runtime ${AGENTOS_PROTO_DIR})
-    target_link_libraries(agentos_server PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+    target_link_libraries(agentos_server PRIVATE gRPC::grpc++)
     target_compile_options(agentos_server PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/W4>
     )
+    if(MSVC)
+        # vcpkg builds grpc as a static library on x64-windows while protobuf is a DLL.
+        # MSVC then reports LNK2005 for std::string_view members defined in both.
+        target_link_options(agentos_server PRIVATE /FORCE:MULTIPLE)
+    endif()
     if(AGENTOS_ENABLE_POSTGRES)
         target_compile_definitions(agentos_server PRIVATE AGENTOS_ENABLE_POSTGRES)
         target_link_libraries(agentos_server PRIVATE ${AGENTOS_POSTGRES_TARGET})
     endif()
+
+    add_executable(agentos_grpc_tests
+        tests/grpc_postgres_tests.cpp
+        ${AGENTOS_PROTO_DIR}/agentos.pb.cc
+        ${AGENTOS_PROTO_DIR}/agentos.grpc.pb.cc
+    )
+    target_include_directories(agentos_grpc_tests PRIVATE runtime ${AGENTOS_PROTO_DIR})
+    target_link_libraries(agentos_grpc_tests PRIVATE gRPC::grpc++)
+    target_compile_definitions(agentos_grpc_tests PRIVATE AGENTOS_ENABLE_POSTGRES)
+    target_link_libraries(agentos_grpc_tests PRIVATE ${AGENTOS_POSTGRES_TARGET})
+    target_compile_options(agentos_grpc_tests PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    )
+    if(MSVC)
+        target_link_options(agentos_grpc_tests PRIVATE /FORCE:MULTIPLE)
+    endif()
+    add_test(NAME grpc_submit COMMAND agentos_grpc_tests grpc_submit)
+    add_test(NAME grpc_cancel COMMAND agentos_grpc_tests grpc_cancel)
 endif()
 
 add_executable(agentos
@@ -134,6 +157,11 @@ add_test(NAME events COMMAND agentos_tests events)
 add_test(NAME deadline COMMAND agentos_tests deadline)
 add_test(NAME cancellation COMMAND agentos_tests cancellation)
 add_test(NAME lease_expiry COMMAND agentos_tests lease_expiry)
+add_test(NAME lease_renewal COMMAND agentos_tests lease_renewal)
+add_test(NAME cancel_state COMMAND agentos_tests cancel_state)
 add_test(NAME idempotency COMMAND agentos_tests idempotency)
 add_test(NAME task_context COMMAND agentos_tests task_context)
 add_test(NAME durable_events COMMAND agentos_tests durable_events)
+if(AGENTOS_ENABLE_POSTGRES)
+    add_test(NAME postgres_recovery COMMAND agentos_tests postgres_recovery)
+endif()

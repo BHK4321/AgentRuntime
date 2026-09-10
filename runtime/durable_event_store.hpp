@@ -107,6 +107,7 @@ private:
         case EventType::TaskTimedOut: return "TaskTimedOut";
         case EventType::WorkerHeartbeat: return "WorkerHeartbeat";
         case EventType::WorkerLeaseExpired: return "WorkerLeaseExpired";
+        case EventType::TaskReclaimed: return "TaskReclaimed";
         }
         throw std::invalid_argument("unknown event type");
     }
@@ -123,6 +124,7 @@ private:
             {"TaskTimedOut", EventType::TaskTimedOut},
             {"WorkerHeartbeat", EventType::WorkerHeartbeat},
             {"WorkerLeaseExpired", EventType::WorkerLeaseExpired},
+            {"TaskReclaimed", EventType::TaskReclaimed},
         };
         for (const auto& [event_name, type] : names) {
             if (name == event_name) {

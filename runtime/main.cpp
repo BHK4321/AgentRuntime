@@ -2,6 +2,7 @@
 
 #ifdef AGENTOS_ENABLE_POSTGRES
 #include "postgres_runtime_store.hpp"
+#include "task_recovery.hpp"
 #endif
 #include "task_handler_registry.hpp"
 
@@ -28,31 +29,8 @@ int main() {
     if (const auto* connection_string = std::getenv("AGENTOS_DATABASE_URL");
         connection_string != nullptr && *connection_string != '\0') {
         postgres_store = std::make_unique<PostgresRuntimeStore>(connection_string);
-        postgres_store->recover_stale_executions();
-        const auto persisted_tasks = postgres_store->load_recoverable_tasks();
-        recovered_runtime = !persisted_tasks.empty();
-        std::vector<Task> recovered_tasks;
-        for (const auto& persisted : persisted_tasks) {
-            Task task;
-            task.id = persisted.id;
-            task.type = persisted.type;
-            task.payload_json = persisted.payload_json;
-            task.dependencies = persisted.dependencies;
-            task.state = persisted.state == "Completed" ? TaskState::Completed :
-                         persisted.state == "Failed" ? TaskState::Failed :
-                         persisted.state == "Blocked" ? TaskState::Blocked : TaskState::Waiting;
-            task.max_attempts = persisted.max_attempts;
-            task.attempts = persisted.attempts;
-            task.retry_delay = persisted.retry_delay;
-            task.deadline = persisted.deadline;
-            task.idempotent = persisted.idempotent;
-            task.idempotency_key = persisted.idempotency_key;
-            if (task.type != "cpp_callback") {
-                task.work = handlers.resolve(task);
-            }
-            recovered_tasks.push_back(std::move(task));
-        }
-        graph.restore_tasks(recovered_tasks);
+        restore_runtime_graph(graph, *postgres_store, handlers);
+        recovered_runtime = graph.pending_size() != 0;
         task_sink = [&postgres_store](const Task& task) {
             postgres_store->persist_task(task);
         };

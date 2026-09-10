@@ -125,7 +125,10 @@ public:
         );
         if (!event.task_id.empty()) {
             const auto state = state_for_event(event.type);
-            if (state != nullptr) {
+            if (event.type == EventType::TaskCancelled) {
+                // Waiting/Ready cancels persist Blocked via TaskBlocked.
+                // Running cancels stay Running until the worker observes the flag.
+            } else if (state != nullptr) {
                 transaction.exec_params(
                     "UPDATE tasks SET state = $1, updated_at = now() WHERE id = $2",
                     state, event.task_id);
@@ -140,6 +143,17 @@ public:
                     "UPDATE tasks SET attempts = attempts + 1, updated_at = now() "
                     "WHERE id = $1", event.task_id);
             }
+            if (event.type == EventType::TaskReclaimed ||
+                (event.type == EventType::WorkerLeaseExpired && !event.task_id.empty())) {
+                transaction.exec_params(
+                    "UPDATE executions SET status = 'ABANDONED', finished_at = now(), "
+                    "lease_expires_at = NULL WHERE task_id = $1 AND status = 'RUNNING'",
+                    event.task_id);
+                transaction.exec_params(
+                    "UPDATE tasks SET state = 'Waiting', updated_at = now() WHERE id = $1 "
+                    "AND state = 'Running'",
+                    event.task_id);
+            }
             if (event.type == EventType::TaskCompleted ||
                 event.type == EventType::TaskFailed ||
                 event.type == EventType::TaskTimedOut) {
@@ -149,6 +163,11 @@ public:
                     event.type == EventType::TaskCompleted ? "COMPLETED" : "FAILED",
                     event.task_id);
             }
+        }
+        if (event.type == EventType::WorkerLeaseExpired && !event.worker_id.empty()) {
+            transaction.exec_params(
+                "UPDATE workers SET status = 'LOST', updated_at = now() WHERE id = $1",
+                event.worker_id);
         }
         transaction.commit();
     }
@@ -173,7 +192,8 @@ private:
         case EventType::TaskCompleted: return "Completed";
         case EventType::TaskFailed: return "Failed";
         case EventType::TaskBlocked: return "Blocked";
-        case EventType::TaskCancelled: return "Blocked";
+        case EventType::TaskCancelled: return nullptr;
+        case EventType::TaskReclaimed: return "Waiting";
         case EventType::TaskTimedOut: return "Failed";
         default: return nullptr;
         }
@@ -191,6 +211,7 @@ private:
         case EventType::TaskTimedOut: return "TaskTimedOut";
         case EventType::WorkerHeartbeat: return "WorkerHeartbeat";
         case EventType::WorkerLeaseExpired: return "WorkerLeaseExpired";
+        case EventType::TaskReclaimed: return "TaskReclaimed";
         }
         return "Unknown";
     }

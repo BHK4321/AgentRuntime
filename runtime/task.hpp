@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <chrono>
 #include <atomic>
@@ -83,4 +84,17 @@ struct Task {
     std::optional<std::string> idempotency_key;
     std::string type = "cpp_callback";
     std::string payload_json = "{}";
+    std::uint64_t run_token = 0;
 };
+
+inline const char* task_state_name(TaskState state) {
+    switch (state) {
+    case TaskState::Waiting: return "Waiting";
+    case TaskState::Ready: return "Ready";
+    case TaskState::Running: return "Running";
+    case TaskState::Completed: return "Completed";
+    case TaskState::Failed: return "Failed";
+    case TaskState::Blocked: return "Blocked";
+    }
+    return "Waiting";
+}

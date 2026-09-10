@@ -15,6 +15,7 @@ enum class EventType {
     TaskTimedOut,
     WorkerHeartbeat,
     WorkerLeaseExpired,
+    TaskReclaimed,
 };
 
 struct RuntimeEvent {
