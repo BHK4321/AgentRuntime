@@ -17,7 +17,6 @@
 #include <vector>
 #include <functional>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 class Scheduler {
@@ -155,13 +154,13 @@ public:
             stopping_ = true;
         }
         condition_.notify_all();
+        if (lease_monitor_.joinable()) {
+            lease_monitor_.join();
+        }
         for (auto& worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
             }
-        }
-        if (lease_monitor_.joinable()) {
-            lease_monitor_.join();
         }
         workers_.clear();
         started_ = false;
@@ -198,6 +197,7 @@ private:
     struct Assignment {
         std::string task_id;
         std::uint64_t run_token = 0;
+        std::chrono::steady_clock::time_point lease_expires_at{};
     };
 
     struct RetryEntry {
@@ -221,6 +221,9 @@ private:
         while (true) {
             {
                 std::lock_guard lock(mutex_);
+                if (stopping_) {
+                    return;
+                }
                 last_heartbeats_[worker_id] = std::chrono::steady_clock::now();
             }
             emit(EventType::WorkerHeartbeat, {}, worker_id);
@@ -230,10 +233,6 @@ private:
             TaskContext context;
             std::uint64_t run_token = 0;
             if (graph_.try_take_ready(task_id, work, context, run_token)) {
-                {
-                    std::lock_guard lock(mutex_);
-                    running_by_worker_[worker_id] = Assignment{task_id, run_token};
-                }
                 execute(task_id, std::move(work), context, worker_id, run_token);
                 {
                     std::lock_guard lock(mutex_);
@@ -241,6 +240,9 @@ private:
                     if (assigned != running_by_worker_.end() &&
                         assigned->second.run_token == run_token) {
                         running_by_worker_.erase(assigned);
+                    }
+                    if (stopping_) {
+                        return;
                     }
                 }
                 continue;
@@ -263,32 +265,30 @@ private:
     }
 
     void lease_monitor_loop() {
-        while (true) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            std::vector<std::pair<std::string, Assignment>> expired;
-            {
-                std::lock_guard lock(mutex_);
-                if (stopping_) {
-                    return;
-                }
-                const auto now = std::chrono::steady_clock::now();
-                for (auto& [worker_id, heartbeat] : last_heartbeats_) {
-                    if (now - heartbeat <= lease_timeout_) {
-                        expired_workers_.erase(worker_id);
-                        continue;
-                    }
-                    if (expired_workers_.contains(worker_id)) {
-                        continue;
-                    }
-                    expired_workers_.insert(worker_id);
-                    Assignment assignment;
-                    const auto running = running_by_worker_.find(worker_id);
-                    if (running != running_by_worker_.end()) {
-                        assignment = running->second;
-                    }
-                    expired.emplace_back(worker_id, assignment);
-                }
+        std::unique_lock lock(mutex_);
+        while (!stopping_) {
+            condition_.wait_for(lock, std::chrono::milliseconds(10), [this] {
+                return stopping_;
+            });
+            if (stopping_) {
+                return;
             }
+            const auto now = std::chrono::steady_clock::now();
+            std::vector<std::pair<std::string, Assignment>> expired;
+            for (const auto& [worker_id, assignment] : running_by_worker_) {
+                if (now < assignment.lease_expires_at) {
+                    continue;
+                }
+                if (reclaimed_tokens_[worker_id] == assignment.run_token) {
+                    continue;
+                }
+                reclaimed_tokens_[worker_id] = assignment.run_token;
+                expired.emplace_back(worker_id, assignment);
+            }
+            if (expired.empty()) {
+                continue;
+            }
+            lock.unlock();
             for (const auto& [worker_id, assignment] : expired) {
                 emit(EventType::WorkerLeaseExpired, assignment.task_id, worker_id);
                 if (assignment.task_id.empty()) {
@@ -298,12 +298,17 @@ private:
                     continue;
                 }
                 {
-                    std::lock_guard lock(mutex_);
-                    running_by_worker_.erase(worker_id);
+                    std::lock_guard erase_lock(mutex_);
+                    const auto assigned = running_by_worker_.find(worker_id);
+                    if (assigned != running_by_worker_.end() &&
+                        assigned->second.run_token == assignment.run_token) {
+                        running_by_worker_.erase(assigned);
+                    }
                 }
                 emit(EventType::TaskReclaimed, assignment.task_id, worker_id);
                 condition_.notify_all();
             }
+            lock.lock();
         }
     }
 
@@ -326,6 +331,13 @@ private:
                  const TaskContext& context, const std::string& worker_id,
                  std::uint64_t run_token) {
         emit(EventType::TaskStarted, task_id, worker_id, graph_.idempotency_key(task_id));
+        {
+            std::lock_guard lock(mutex_);
+            const auto now = std::chrono::steady_clock::now();
+            last_heartbeats_[worker_id] = now;
+            running_by_worker_[worker_id] = Assignment{
+                task_id, run_token, now + lease_timeout_};
+        }
         const auto started_at = std::chrono::steady_clock::now();
         std::atomic<bool> running_work{true};
         std::thread lease_renewer;
@@ -334,7 +346,12 @@ private:
                 while (running_work.load()) {
                     {
                         std::lock_guard lock(mutex_);
-                        last_heartbeats_[worker_id] = std::chrono::steady_clock::now();
+                        const auto now = std::chrono::steady_clock::now();
+                        last_heartbeats_[worker_id] = now;
+                        const auto assigned = running_by_worker_.find(worker_id);
+                        if (assigned != running_by_worker_.end()) {
+                            assigned->second.lease_expires_at = now + lease_timeout_;
+                        }
                     }
                     emit(EventType::WorkerHeartbeat, {}, worker_id);
                     const auto slice = std::min(lease_timeout_ / 3, std::chrono::milliseconds(50));
@@ -453,7 +470,7 @@ private:
     const std::chrono::milliseconds lease_timeout_;
     std::thread lease_monitor_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_heartbeats_;
-    std::unordered_set<std::string> expired_workers_;
+    std::unordered_map<std::string, std::uint64_t> reclaimed_tokens_;
     std::unordered_map<std::string, Assignment> running_by_worker_;
     std::atomic<bool> renew_lease_while_running_{true};
 };

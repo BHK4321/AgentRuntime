@@ -45,15 +45,15 @@ public:
         std::lock_guard lock(mutex_);
         pqxx::connection connection(connection_string_);
         pqxx::work transaction(connection);
+        // Single-process restart: every RUNNING row belonged to dead workers.
         transaction.exec(
             "WITH stale AS ("
             " UPDATE executions SET status = 'ABANDONED', finished_at = now(), "
-            " lease_expires_at = NULL WHERE status = 'RUNNING' AND "
-            " (lease_expires_at IS NULL OR lease_expires_at < now()) "
+            " lease_expires_at = NULL WHERE status = 'RUNNING' "
             " RETURNING task_id, worker_id"
             "), reset AS ("
             " UPDATE tasks SET state = 'Waiting', updated_at = now() "
-            " WHERE id IN (SELECT task_id FROM stale) RETURNING id"
+            " WHERE id IN (SELECT task_id FROM stale) AND state = 'Running' RETURNING id"
             ") "
             "INSERT INTO runtime_events (event_type, task_id, worker_id) "
             "SELECT 'WorkerLeaseExpired', stale.task_id, COALESCE(stale.worker_id, '') "
@@ -115,6 +115,14 @@ public:
                 "INSERT INTO workers (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET "
                 "status = 'ACTIVE', last_heartbeat = now(), updated_at = now()",
                 event.worker_id);
+            if (event.type == EventType::WorkerHeartbeat) {
+                transaction.exec_params(
+                    "UPDATE executions SET lease_expires_at = now() + interval '5 seconds' "
+                    "WHERE worker_id = $1 AND status = 'RUNNING'",
+                    event.worker_id);
+                transaction.commit();
+                return;
+            }
         }
         transaction.exec_params(
             "INSERT INTO runtime_events "
@@ -134,6 +142,12 @@ public:
                     state, event.task_id);
             }
             if (event.type == EventType::TaskStarted) {
+                if (!event.worker_id.empty()) {
+                    transaction.exec_params(
+                        "INSERT INTO workers (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET "
+                        "status = 'ACTIVE', last_heartbeat = now(), updated_at = now()",
+                        event.worker_id);
+                }
                 transaction.exec_params(
                     "INSERT INTO executions (task_id, worker_id, attempt, status, "
                     "lease_expires_at) SELECT id, $2, attempts + 1, 'RUNNING', "
@@ -143,12 +157,19 @@ public:
                     "UPDATE tasks SET attempts = attempts + 1, updated_at = now() "
                     "WHERE id = $1", event.task_id);
             }
-            if (event.type == EventType::TaskReclaimed ||
-                (event.type == EventType::WorkerLeaseExpired && !event.task_id.empty())) {
+            if (event.type == EventType::TaskReclaimed) {
+                // Fence by worker: a late WorkerLeaseExpired must not abandon the
+                // replacement attempt that already holds a new RUNNING row.
                 transaction.exec_params(
                     "UPDATE executions SET status = 'ABANDONED', finished_at = now(), "
-                    "lease_expires_at = NULL WHERE task_id = $1 AND status = 'RUNNING'",
-                    event.task_id);
+                    "lease_expires_at = NULL WHERE task_id = $1 AND status = 'RUNNING' "
+                    "AND worker_id = $2",
+                    event.task_id, event.worker_id);
+                transaction.exec_params(
+                    "INSERT INTO executions (task_id, worker_id, attempt, status, finished_at) "
+                    "SELECT $1, $2, 0, 'ABANDONED', now() WHERE NOT EXISTS ("
+                    " SELECT 1 FROM executions WHERE task_id = $1 AND status = 'ABANDONED')",
+                    event.task_id, event.worker_id);
                 transaction.exec_params(
                     "UPDATE tasks SET state = 'Waiting', updated_at = now() WHERE id = $1 "
                     "AND state = 'Running'",

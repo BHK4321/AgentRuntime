@@ -2,13 +2,25 @@
 #include "durable_event_store.hpp"
 
 #include <atomic>
-#include <cassert>
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <iostream>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
+
+#undef NDEBUG
+#undef assert
+#include <cassert>
+
+void require(bool ok, const char* what) {
+    if (!ok) {
+        throw std::runtime_error(std::string("test requirement failed: ") + what);
+    }
+}
 
 void expect_invalid_argument(const std::function<void()>& action) {
     bool threw = false;
@@ -369,6 +381,9 @@ void test_worker_lease_expiry_is_reported() {
     std::atomic lease_expired{false};
     std::atomic reclaimed{false};
     std::atomic started{0};
+    std::atomic runs{0};
+    // Lease must outlast Windows Sleep granularity (~15.6ms). Stamp the lease
+    // when the assignment starts so a slow heartbeat write cannot expire it.
     Scheduler scheduler(graph, 1, [&](const RuntimeEvent& event) {
         if (event.type == EventType::WorkerLeaseExpired) {
             lease_expired = true;
@@ -377,19 +392,25 @@ void test_worker_lease_expiry_is_reported() {
         } else if (event.type == EventType::TaskStarted) {
             ++started;
         }
-    }, std::chrono::milliseconds(15));
+    }, std::chrono::milliseconds(80));
     scheduler.set_renew_lease_while_running(false);
 
     scheduler.start();
-    scheduler.submit(Task{"A", {}, [] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    scheduler.submit(Task{"A", {}, [&] {
+        if (++runs == 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
     }});
-    scheduler.wait_until_idle();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (std::chrono::steady_clock::now() < deadline &&
+           !(lease_expired && reclaimed && started >= 2)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
     scheduler.shutdown();
 
-    assert(lease_expired);
-    assert(reclaimed);
-    assert(started >= 2);
+    require(lease_expired, "WorkerLeaseExpired was not emitted");
+    require(reclaimed, "TaskReclaimed was not emitted");
+    require(started >= 2, "stolen run did not start a second attempt");
 }
 
 void test_lease_renewal_prevents_false_reclaim() {
@@ -402,17 +423,17 @@ void test_lease_renewal_prevents_false_reclaim() {
         } else if (event.type == EventType::TaskStarted) {
             ++started;
         }
-    }, std::chrono::milliseconds(15));
+    }, std::chrono::milliseconds(80));
 
     scheduler.start();
     scheduler.submit(Task{"A", {}, [] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }});
     scheduler.wait_until_idle();
     scheduler.shutdown();
 
-    assert(!reclaimed);
-    assert(started == 1);
+    require(!reclaimed, "live worker was reclaimed while renewing its lease");
+    require(started == 1, "renewal test started more than one attempt");
 }
 
 void test_cancel_reports_actual_state() {
@@ -569,7 +590,13 @@ void test_postgres_recovery_resumes_sleep_task() {
     TaskGraph graph;
     TaskHandlerRegistry handlers;
     handlers.register_handler("sleep", [](const std::string&, const TaskContext&) {});
-    restore_runtime_graph(graph, store, handlers);
+    auto recovered = load_recovered_tasks(store, handlers);
+    recovered.erase(std::remove_if(recovered.begin(), recovered.end(),
+                                   [&](const Task& recovered_task) {
+                                       return recovered_task.id.rfind(prefix, 0) != 0;
+                                   }),
+                    recovered.end());
+    graph.restore_tasks(recovered);
     Scheduler scheduler(graph, 1, [&store](const RuntimeEvent& event) {
         store.append(event);
     }, std::chrono::seconds(5), {}, {}, [&handlers](const Task& recovered) {
@@ -579,15 +606,19 @@ void test_postgres_recovery_resumes_sleep_task() {
     scheduler.wait_until_idle();
     scheduler.shutdown();
 
-    pqxx::read_transaction read(connection);
-    const auto row = read.exec_params("SELECT state FROM tasks WHERE id = $1", task_id);
-    assert(!row.empty());
-    assert(row[0][0].as<std::string>() == "Completed");
+    {
+        pqxx::read_transaction read(connection);
+        const auto row = read.exec_params("SELECT state FROM tasks WHERE id = $1", task_id);
+        if (row.empty() || row[0][0].as<std::string>() != "Completed") {
+            throw std::runtime_error("postgres recovery did not complete " + task_id);
+        }
+    }
     cleanup_postgres_prefix(connection, prefix);
 }
 #endif
 
 int main(int argc, char* argv[]) {
+    try {
     if (argc == 1) {
         test_dependency_order();
         test_independent_tasks_run_concurrently();
@@ -669,4 +700,8 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Passed: " << test_name << '\n';
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

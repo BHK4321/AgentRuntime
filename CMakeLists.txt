@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+enable_testing()
+
 option(AGENTOS_ENABLE_POSTGRES "Enable the libpqxx PostgreSQL event store" OFF)
 option(AGENTOS_ENABLE_GRPC "Build the gRPC runtime service" OFF)
 
@@ -99,6 +101,11 @@ if(AGENTOS_ENABLE_GRPC)
     endif()
     add_test(NAME grpc_submit COMMAND agentos_grpc_tests grpc_submit)
     add_test(NAME grpc_cancel COMMAND agentos_grpc_tests grpc_cancel)
+    add_test(NAME grpc_recovery COMMAND agentos_grpc_tests grpc_recovery)
+    add_test(NAME grpc_lease_steal COMMAND agentos_grpc_tests grpc_lease_steal)
+    set_tests_properties(grpc_submit grpc_cancel grpc_recovery grpc_lease_steal
+        PROPERTIES RESOURCE_LOCK AgentOSPostgres)
+    set_tests_properties(grpc_lease_steal PROPERTIES TIMEOUT 30)
 endif()
 
 add_executable(agentos
@@ -109,8 +116,6 @@ target_compile_options(agentos PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
-
-enable_testing()
 
 add_executable(agentos_tests
     tests/scheduler_tests.cpp
@@ -157,11 +162,30 @@ add_test(NAME events COMMAND agentos_tests events)
 add_test(NAME deadline COMMAND agentos_tests deadline)
 add_test(NAME cancellation COMMAND agentos_tests cancellation)
 add_test(NAME lease_expiry COMMAND agentos_tests lease_expiry)
+set_tests_properties(lease_expiry PROPERTIES TIMEOUT 30)
 add_test(NAME lease_renewal COMMAND agentos_tests lease_renewal)
+set_tests_properties(lease_renewal PROPERTIES TIMEOUT 30)
 add_test(NAME cancel_state COMMAND agentos_tests cancel_state)
 add_test(NAME idempotency COMMAND agentos_tests idempotency)
 add_test(NAME task_context COMMAND agentos_tests task_context)
 add_test(NAME durable_events COMMAND agentos_tests durable_events)
 if(AGENTOS_ENABLE_POSTGRES)
     add_test(NAME postgres_recovery COMMAND agentos_tests postgres_recovery)
+    set_tests_properties(postgres_recovery PROPERTIES RESOURCE_LOCK AgentOSPostgres)
 endif()
+
+# Single CTest entry point for this build tree. Configure with
+# AGENTOS_ENABLE_POSTGRES=ON and AGENTOS_ENABLE_GRPC=ON (AgentOS/build-grpc)
+# to register in-process, Postgres, and gRPC tests together.
+set(AGENTOS_TEST_ALL_DEPS agentos_tests)
+if(AGENTOS_ENABLE_GRPC)
+    list(APPEND AGENTOS_TEST_ALL_DEPS agentos_grpc_tests)
+endif()
+add_custom_target(test-all
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -C $<CONFIG> --output-on-failure
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS ${AGENTOS_TEST_ALL_DEPS}
+    COMMENT "Run every CTest registered in this build directory"
+    USES_TERMINAL
+    VERBATIM
+)

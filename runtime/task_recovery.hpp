@@ -43,9 +43,10 @@ inline std::vector<Task> load_recovered_tasks(
         task.deadline = persisted.deadline;
         task.idempotent = persisted.idempotent;
         task.idempotency_key = persisted.idempotency_key;
-        if (task.type != "cpp_callback") {
-            task.work = handlers.resolve(task);
+        if (task.type == "cpp_callback" || !handlers.contains(task.type)) {
+            continue;
         }
+        task.work = handlers.resolve(task);
         recovered_tasks.push_back(std::move(task));
     }
     return recovered_tasks;

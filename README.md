@@ -60,6 +60,8 @@ AgentOS/
 │   ├── grpc_runtime_client.py
 │   └── requirements.txt
 ├── tests/
+├── scripts/
+│   └── run-all-tests.ps1             # env + build-grpc + ctest
 └── benchmarks/
 ```
 
@@ -181,7 +183,8 @@ If that import fails, run it from `E:\OS` or set
 
 ### 5. Configure and build C++ targets
 
-gRPC runtime used by FastAPI:
+Use **one** CMake tree, `AgentOS/build-grpc`, for the server, in-process
+tests, Postgres recovery, and gRPC tests.
 
 ```powershell
 cmake -S AgentOS -B AgentOS/build-grpc `
@@ -189,16 +192,27 @@ cmake -S AgentOS -B AgentOS/build-grpc `
   -DAGENTOS_ENABLE_GRPC=ON `
   -DCMAKE_TOOLCHAIN_FILE=E:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DCMAKE_PREFIX_PATH=E:/vcpkg/installed/x64-windows
-cmake --build AgentOS/build-grpc --config Release --target agentos_server
+cmake --build AgentOS/build-grpc --config Release
 ```
 
-Expected binary:
+That produces:
 
 ```text
 AgentOS\build-grpc\Release\agentos_server.exe
+AgentOS\build-grpc\Release\agentos_tests.exe
+AgentOS\build-grpc\Release\agentos_grpc_tests.exe
+AgentOS\build-grpc\Release\agentos.exe
+AgentOS\build-grpc\Release\agentos_benchmark.exe
 ```
 
-Optional PostgreSQL demo binary (`A → B/C → D → E`):
+Build a single target if you only need the API runtime:
+
+```powershell
+cmake --build AgentOS/build-grpc --config Release --target agentos_server
+```
+
+Optional second tree for the Postgres demo only (`A → B/C → D → E`), if you
+do not want gRPC in that binary’s build:
 
 ```powershell
 cmake -S AgentOS -B AgentOS/build-postgres `
@@ -208,7 +222,50 @@ cmake -S AgentOS -B AgentOS/build-postgres `
 cmake --build AgentOS/build-postgres --config Release --target agentos
 ```
 
-Optional in-process tests (no gRPC, no Postgres required for the default suite):
+### 6. Run all tests (single ctest path)
+
+PostgreSQL must be running. `postgres_recovery` and the `grpc_*` tests share
+the `agentos` database; CTest serializes those tests with a resource lock.
+Stop `agentos_server` first so recovery tests do not abandon live rows.
+
+From `E:\OS`, this is the only command you need after a successful configure:
+
+```powershell
+powershell -File AgentOS\scripts\run-all-tests.ps1
+```
+
+The script sets `AGENTOS_DATABASE_URL` and `PATH`, builds `AgentOS/build-grpc`
+(Release), then runs:
+
+```powershell
+$env:AGENTOS_DATABASE_URL = "postgresql://agentos:agentos@localhost:5432/agentos"
+$env:PATH = "E:\vcpkg\installed\x64-windows\bin;C:\Program Files\PostgreSQL\17\bin;$env:PATH"
+ctest --test-dir AgentOS/build-grpc -C Release --output-on-failure
+```
+
+That `ctest` line is the single test entry point. With
+`AGENTOS_ENABLE_POSTGRES=ON` and `AGENTOS_ENABLE_GRPC=ON` it registers:
+
+| Group | Names |
+|---|---|
+| In-process scheduler | `dependency_order`, `concurrent_tasks`, `dynamic_submission`, `mixed_submission`, `completed_dependency`, `validation`, `atomic_rejection`, `incremental_validation`, `failure_propagation`, `retry_success`, `retry_exhausted`, `events`, `deadline`, `cancellation`, `lease_expiry`, `lease_renewal`, `cancel_state`, `idempotency`, `task_context`, `durable_events` |
+| Postgres | `postgres_recovery` |
+| gRPC + Postgres | `grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_lease_steal` |
+
+Equivalent CMake target (same directory, same env vars as above):
+
+```powershell
+cmake --build AgentOS/build-grpc --config Release --target test-all
+```
+
+Filter one test:
+
+```powershell
+ctest --test-dir AgentOS/build-grpc -C Release --output-on-failure -R lease_expiry
+```
+
+Optional in-process-only tree (no gRPC, no Postgres required except
+`postgres_recovery` which is not registered here):
 
 ```powershell
 cmake -S AgentOS -B AgentOS/build
@@ -216,15 +273,11 @@ cmake --build AgentOS/build --config Debug --target agentos_tests
 ctest --test-dir AgentOS/build -C Debug --output-on-failure
 ```
 
-Postgres recovery and gRPC tests are registered in `AgentOS/build-grpc` when
-`AGENTOS_ENABLE_GRPC=ON`. They need `AGENTOS_DATABASE_URL` and vcpkg/Postgres
-DLLs on `PATH`.
-
-Optional benchmark:
+Optional benchmark (from either tree after a Release build):
 
 ```powershell
-cmake --build AgentOS/build --config Release --target agentos_benchmark
-.\AgentOS\build\Release\agentos_benchmark.exe
+cmake --build AgentOS/build-grpc --config Release --target agentos_benchmark
+.\AgentOS\build-grpc\Release\agentos_benchmark.exe
 ```
 
 When the binaries exist, start the processes in **Start each service**.
@@ -504,9 +557,12 @@ that path exists for tests. In normal operation, renewal is on.
 **What happens on crash**
 
 1. Process dies. Postgres still has `tasks`, `executions`, and `runtime_events`.
-2. `agentos_server` starts, calls `recover_stale_executions()` (RUNNING rows
-   whose lease expired become `ABANDONED`, tasks return to `Waiting`), then
-   `load_recoverable_tasks()` into the graph, then starts workers.
+2. `agentos_server` starts, calls `recover_stale_executions()`: every `RUNNING`
+   execution is `ABANDONED` (those workers are gone), matching tasks go back to
+   `Waiting`, then `load_recoverable_tasks()` fills the in-memory graph, then
+   Heartbeats also extend `lease_expires_at` while the process is alive so live
+rows stay queryable. They are not inserted into `runtime_events` (too chatty);
+worker liveness is `workers.last_heartbeat`.
 3. Registered types (`sleep`) run again. `cpp_callback` is skipped.
 
 There is no multi-node membership, so two `agentos_server` processes on one
@@ -523,16 +579,77 @@ is extra moving parts without a consumer.
 
 **Tests**
 
-In-process scheduler tests live in `tests/scheduler_tests.cpp` (including
-lease reclaim, lease renewal, and cancel state). Postgres recovery and the
-gRPC path run when CMake is configured with Postgres/gRPC and
-`AGENTOS_DATABASE_URL` is set:
+See **6. Run all tests**. The one CTest tree is `AgentOS/build-grpc`. In-process
+scheduler tests are `tests/scheduler_tests.cpp`. Postgres recovery and gRPC
+(`grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_lease_steal`) are
+registered in that same tree when CMake is configured with Postgres and gRPC.
+
+```powershell
+powershell -File AgentOS\scripts\run-all-tests.ps1
+```
+
+or:
 
 ```powershell
 $env:AGENTOS_DATABASE_URL = "postgresql://agentos:agentos@localhost:5432/agentos"
 $env:PATH = "E:\vcpkg\installed\x64-windows\bin;C:\Program Files\PostgreSQL\17\bin;$env:PATH"
 ctest --test-dir AgentOS/build-grpc -C Release --output-on-failure
 ```
+
+**Issues this work actually hit** (useful in an interview; these are design
+bugs, not compile errors):
+
+1. **The resume path was on the wrong binary.** Recovery lived in the demo
+   `agentos.exe`, not `agentos_server`. API-submitted work survived in Postgres
+   and still vanished from the process that serves gRPC. Wiring
+   `restore_runtime_graph()` into the server is what made crash restart real.
+
+2. **Cancel lied.** `CancelTask` used to always return `Blocked`. Waiting work
+   is blocked immediately; running work stays `Running` until the worker sees
+   the flag. Returning the graph state is cooperative cancel, not preemption.
+
+3. **Lease expiry was an event, not a steal.** Emitting `WorkerLeaseExpired`
+   without `reclaim_running()` + `run_token` leaves `Running` stuck. Steal has
+   to requeue and fence: a late `complete()` from the old attempt must no-op.
+
+4. **Abandon-by-task-id is a lost update.** If a late lease event marks every
+   `RUNNING` row for that task `ABANDONED`, a replacement attempt that already
+   inserted a new row gets killed in Postgres. Abandon is fenced by
+   `(task_id, worker_id)` on `TaskReclaimed`. If the start row is not committed
+   yet, reclaim still inserts an `ABANDONED` execution so the table matches the
+   event log.
+
+5. **Turning off lease renewal live-locks steal tests.** Renewal is how a live
+   worker proves it is alive. If you disable it to force expiry, the stolen
+   attempt also looks dead and is reclaimed in a loop. The honest test: first
+   attempt sleeps past the lease; the stolen attempt finishes immediately.
+   The lease clock starts when the assignment is stamped, not at the last idle
+   heartbeat. Windows `Sleep` is ~15.6ms, so a 15ms lease expires on the first
+   monitor tick and `shutdown()` joins a worker that never sees `stopping_`.
+
+6. **Crash recovery is process-scoped, not lease-scoped.** On
+   `agentos_server` start, every `RUNNING` execution belonged to dead threads,
+   even if `lease_expires_at` is still in the future. Only abandoning expired
+   leases would skip work that crashed inside the lease window.
+
+7. **Schema catches stale writers.** `executions.worker_id` references
+   `workers`. Seeding a crash row without inserting the worker fails the FK.
+   Heartbeats upsert workers first so start/lease rows can land.
+
+8. **Idle lease expiry hid later work.** The monitor recorded a worker as
+   expired while it was blocked in a slow heartbeat write, then ignored that
+   worker forever. If it took a task afterwards, the assignment was never
+   stolen. Running work must stay reclaimable even after an idle expiry.
+
+9. **Shared Postgres is not a test fixture.** `recover_stale_executions()`
+   is global. Parallel gRPC tests, or a test while a real server is running,
+   will abandon each other's rows. Tests are serialized with a CTest resource
+   lock; run one runtime on a database.
+
+10. **gRPC vs in-process is a lifetime choice.** In-process FastAPI→scheduler
+   is faster, but then HTTP crashes take workers with them. gRPC lets Uvicorn
+   restart while C++ keeps the thread pool. Kafka would be a log between
+   services; it does not give you a transactional DAG.
 
 ---
 
