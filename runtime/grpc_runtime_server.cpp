@@ -37,7 +37,8 @@ int main() {
     Scheduler::TaskResolver resolver = [&handlers](const Task& task) {
         return handlers.resolve(task);
     };
-    Scheduler scheduler(graph, 4, std::move(event_sink), {},
+    Scheduler scheduler(graph, 4, std::move(event_sink),
+                        std::chrono::seconds(5),
                         std::move(task_sink), std::move(task_batch_sink),
                         std::move(resolver));
     scheduler.start();
