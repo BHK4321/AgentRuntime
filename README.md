@@ -5,7 +5,7 @@ workflows. PostgreSQL stores task definitions, dependencies, execution attempts,
 worker heartbeats, leases, and runtime events. A FastAPI service is the HTTP
 front door and submits work to the C++ runtime over gRPC.
 
-![AgentOS complete architecture](docs/agentos-architecture.png)
+![AgentOS complete architecture](docs/agentos-architecture-v2.png)
 
 The diagram shows the live request path, process boundaries, durable storage,
 file-task sandbox, connection pool, and lease-based crash recovery.
