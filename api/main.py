@@ -16,7 +16,7 @@ DATABASE_URL = os.getenv(
     "postgresql://agentos:agentos@localhost:5432/agentos",
 )
 RUNTIME_ADDRESS = os.getenv("AGENTOS_RUNTIME_ADDRESS", "127.0.0.1:50051")
-SUPPORTED_TYPES = {"sleep", "cpp_callback"}
+SUPPORTED_TYPES = {"sleep", "text_transform", "word_count", "cpp_callback"}
 TERMINAL_STATES = {"Completed", "Failed", "Blocked"}
 
 app = FastAPI(title="AgentOS API", version="0.1.0")
@@ -101,6 +101,34 @@ def validate_workflow(tasks: list[TaskRequest], existing_ids: set[str]) -> None:
                     status_code=422,
                     detail=f"sleep task {task.id} requires non-negative integer payload.seconds",
                 )
+        if task.type in {"text_transform", "word_count"}:
+            input_path = task.payload.get("input_path")
+            output_path = task.payload.get("output_path")
+            if not isinstance(input_path, str) or not input_path:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{task.type} task {task.id} requires payload.input_path",
+                )
+            if not isinstance(output_path, str) or not output_path:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{task.type} task {task.id} requires payload.output_path",
+                )
+            for path in (input_path, output_path):
+                normalized = path.replace("\\", "/")
+                if normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"{task.type} task {task.id} paths must stay inside AGENTOS_WORK_DIR",
+                    )
+        if task.type == "text_transform" and task.payload.get("operation") not in {
+            "uppercase",
+            "lowercase",
+        }:
+            raise HTTPException(
+                status_code=422,
+                detail=f"text_transform task {task.id} requires uppercase or lowercase operation",
+            )
 
     edges = {task.id: [dependency for dependency in task.dependencies if dependency in incoming] for task in tasks}
     visiting: set[str] = set()

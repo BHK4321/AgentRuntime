@@ -1,4 +1,5 @@
 #include "grpc_runtime_service.hpp"
+#include "file_task_handlers.hpp"
 #include "postgres_runtime_store.hpp"
 #include "scheduler.hpp"
 #include "task_handler_registry.hpp"
@@ -9,6 +10,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -107,6 +110,7 @@ struct Harness {
         bool hold_until_cancel = false;
         bool renew_leases = true;
         bool sleep_only_first_attempt = false;
+        std::filesystem::path file_work_root;
         std::size_t worker_count = 2;
     };
 
@@ -132,6 +136,9 @@ struct Harness {
             handlers.register_handler("sleep", [](const std::string& payload, const TaskContext&) {
                 std::this_thread::sleep_for(parse_sleep_duration(payload));
             });
+        }
+        if (!config.file_work_root.empty()) {
+            file_tasks::register_handlers(handlers, config.file_work_root);
         }
         if (config.restore) {
             restore_runtime_graph(graph, store, handlers);
@@ -332,6 +339,62 @@ void test_grpc_recovery_resumes_persisted_work() {
     cleanup_prefix(url, prefix);
 }
 
+void test_grpc_file_workflow() {
+    const auto* url = require_database_url();
+    const auto prefix = unique_prefix("file");
+    const auto transform_id = prefix + "-transform";
+    const auto count_id = prefix + "-count";
+    const auto work_root = std::filesystem::temp_directory_path() / prefix;
+    cleanup_prefix(url, prefix);
+    std::filesystem::create_directories(work_root / "input");
+    {
+        std::ofstream input(work_root / "input" / "sample.txt");
+        input << "Hello durable world\nSecond line";
+    }
+
+    Harness::Config config;
+    config.file_work_root = work_root;
+    Harness harness(url, config);
+    agentos::SubmitWorkflowRequest request;
+    auto* transform = request.add_tasks();
+    transform->set_id(transform_id);
+    transform->set_type("text_transform");
+    transform->set_payload_json(
+        R"({"input_path":"input/sample.txt","output_path":"output/normalized.txt","operation":"uppercase"})");
+    auto* count = request.add_tasks();
+    count->set_id(count_id);
+    count->set_type("word_count");
+    count->set_payload_json(
+        R"({"input_path":"output/normalized.txt","output_path":"output/stats.json"})");
+    count->add_dependencies(transform_id);
+
+    agentos::SubmitWorkflowResponse response;
+    grpc::ClientContext context;
+    const auto status = harness.stub->SubmitWorkflow(&context, request, &response);
+    if (!status.ok()) {
+        throw std::runtime_error("file workflow submission failed: " + status.error_message());
+    }
+    wait_for_state(url, count_id, "Completed", std::chrono::seconds(5));
+    std::ifstream normalized(work_root / "output" / "normalized.txt");
+    const std::string normalized_text{
+        std::istreambuf_iterator<char>(normalized), std::istreambuf_iterator<char>()};
+    if (normalized_text != "HELLO DURABLE WORLD\nSECOND LINE") {
+        throw std::runtime_error("text_transform output mismatch");
+    }
+    std::ifstream stats(work_root / "output" / "stats.json");
+    const std::string stats_text{
+        std::istreambuf_iterator<char>(stats), std::istreambuf_iterator<char>()};
+    if (stats_text.find("\"words\": 5") == std::string::npos ||
+        stats_text.find("\"lines\": 2") == std::string::npos) {
+        throw std::runtime_error("word_count output mismatch: " + stats_text);
+    }
+    normalized.close();
+    stats.close();
+    harness.stop();
+    cleanup_prefix(url, prefix);
+    std::filesystem::remove_all(work_root);
+}
+
 void test_grpc_lease_steal_requeues_work() {
     const auto* url = require_database_url();
     const auto prefix = unique_prefix("lease");
@@ -371,6 +434,7 @@ int main(int argc, char* argv[]) {
             test_grpc_submit_persists_to_postgres();
             test_grpc_cancel_returns_graph_state();
             test_grpc_recovery_resumes_persisted_work();
+            test_grpc_file_workflow();
             test_grpc_lease_steal_requeues_work();
             std::cout << "Passed gRPC/Postgres tests\n";
             return 0;
@@ -382,6 +446,8 @@ int main(int argc, char* argv[]) {
             test_grpc_cancel_returns_graph_state();
         } else if (test_name == "grpc_recovery") {
             test_grpc_recovery_resumes_persisted_work();
+        } else if (test_name == "grpc_file_workflow") {
+            test_grpc_file_workflow();
         } else if (test_name == "grpc_lease_steal") {
             test_grpc_lease_steal_requeues_work();
         } else {

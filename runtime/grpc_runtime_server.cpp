@@ -1,4 +1,5 @@
 #include "grpc_runtime_service.hpp"
+#include "file_task_handlers.hpp"
 #include "postgres_runtime_store.hpp"
 #include "scheduler.hpp"
 #include "task_handler_registry.hpp"
@@ -22,6 +23,7 @@ int main() {
     handlers.register_handler("sleep", [](const std::string& payload, const TaskContext&) {
         std::this_thread::sleep_for(parse_sleep_duration(payload));
     });
+    file_tasks::register_handlers(handlers);
 
     TaskGraph graph;
     restore_runtime_graph(graph, store, handlers);

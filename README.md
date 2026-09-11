@@ -71,6 +71,7 @@ AgentOS/
 |---|---|---|
 | `AGENTOS_DATABASE_URL` | `postgresql://agentos:agentos@localhost:5432/agentos` | C++ binaries and FastAPI |
 | `AGENTOS_RUNTIME_ADDRESS` | `127.0.0.1:50051` | FastAPI gRPC client |
+| `AGENTOS_WORK_DIR` | `<current directory>/AgentOS/work` | Durable file-task sandbox |
 | `PATH` | must include vcpkg and PostgreSQL `bin` | C++ processes loading `libpq` / vcpkg DLLs |
 
 Local connection string:
@@ -353,6 +354,11 @@ POST /tasks/{id}/cancel
 ```
 
 `GET /health` checks PostgreSQL only, not the gRPC runtime.
+
+Durable task types include `sleep`, `text_transform`, and `word_count`. See
+[`docs/file-workflows.md`](docs/file-workflows.md) for a real dependency
+workflow and [`scripts/run-durable-benchmark.ps1`](scripts/run-durable-benchmark.ps1)
+for the reproducible end-to-end benchmark.
 
 ### Terminal 4 — Postgres monitor (`psql`)
 

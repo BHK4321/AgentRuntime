@@ -36,6 +36,8 @@ api/generated/
 *.events
 *.eventlog
 benchmarks/results/*.log
+benchmarks/results/durable_benchmark_latest.csv
+work/
 .env
 .env.*
 !*.env.example

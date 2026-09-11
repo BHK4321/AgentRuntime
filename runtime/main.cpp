@@ -1,4 +1,5 @@
 #include "scheduler.hpp"
+#include "file_task_handlers.hpp"
 
 #ifdef AGENTOS_ENABLE_POSTGRES
 #include "postgres_runtime_store.hpp"
@@ -21,6 +22,7 @@ int main() {
         std::cout << context.task_id << " running via registered handler\n";
         std::this_thread::sleep_for(parse_sleep_duration(payload));
     });
+    file_tasks::register_handlers(handlers);
 #ifdef AGENTOS_ENABLE_POSTGRES
     std::unique_ptr<PostgresRuntimeStore> postgres_store;
     Scheduler::EventSink event_sink;

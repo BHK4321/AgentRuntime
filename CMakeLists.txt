@@ -102,8 +102,9 @@ if(AGENTOS_ENABLE_GRPC)
     add_test(NAME grpc_submit COMMAND agentos_grpc_tests grpc_submit)
     add_test(NAME grpc_cancel COMMAND agentos_grpc_tests grpc_cancel)
     add_test(NAME grpc_recovery COMMAND agentos_grpc_tests grpc_recovery)
+    add_test(NAME grpc_file_workflow COMMAND agentos_grpc_tests grpc_file_workflow)
     add_test(NAME grpc_lease_steal COMMAND agentos_grpc_tests grpc_lease_steal)
-    set_tests_properties(grpc_submit grpc_cancel grpc_recovery grpc_lease_steal
+    set_tests_properties(grpc_submit grpc_cancel grpc_recovery grpc_file_workflow grpc_lease_steal
         PROPERTIES RESOURCE_LOCK AgentOSPostgres)
     set_tests_properties(grpc_lease_steal PROPERTIES TIMEOUT 30)
 endif()
