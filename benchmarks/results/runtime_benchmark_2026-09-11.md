@@ -49,6 +49,38 @@ database connections, and one lease-renewal loop for all active assignments.
 The updated design must define flush and shutdown behavior, backpressure, event
 ordering, and which state transitions must commit before an API call succeeds.
 
+## Connection-pool redesign results
+
+The first redesign replaces per-operation connection creation and the global
+store mutex with a pool of persistent PostgreSQL connections. The gRPC runtime
+uses four pooled connections, matching its four scheduler workers. Each caller
+exclusively borrows one connection for the lifetime of its transaction, then an
+RAII lease returns it to the pool. Task state transitions remain synchronous and
+retain their existing transaction boundaries.
+
+The same 100-task durable burst was repeated five times after the change:
+
+| Trial | Tasks/s | p95 ready-to-start (ms) | Elapsed (s) |
+|---:|---:|---:|---:|
+| 1 | 581.348 | 163.533 | 0.172 |
+| 2 | 678.481 | 140.942 | 0.147 |
+| 3 | 737.719 | 128.925 | 0.136 |
+| 4 | 561.681 | 171.263 | 0.178 |
+| 5 | 702.627 | 135.803 | 0.142 |
+| **Median** | **678.481** | **140.942** | **0.147** |
+
+Compared with the original durable median, connection pooling improved
+throughput by **141.2x** and reduced p95 ready-to-start latency by **140.1x**.
+
+Ten additional forced-crash trials all recovered successfully. Their recovery
+times were 352.687, 332.582, 332.219, 315.864, 439.256, 416.819, 306.087,
+318.882, 318.885, and 319.424 ms. Median process-launch-to-resume time was
+**325.822 ms**, and every trial contained one abandoned original execution and
+one completed replacement execution.
+
+All 25 registered CTest cases passed after the redesign, including gRPC submit,
+cancel, recovery, lease stealing, and PostgreSQL recovery tests.
+
 ## Scheduler-only recorded result
 
 The existing `scheduler_benchmark.csv` records 5,000 simulated 2 ms tasks at

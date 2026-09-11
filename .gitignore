@@ -35,6 +35,7 @@ api/generated/
 # Local runtime and environment files
 *.events
 *.eventlog
+benchmarks/results/*.log
 .env
 .env.*
 !*.env.example

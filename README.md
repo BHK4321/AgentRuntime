@@ -531,6 +531,12 @@ the in-memory graph and resumed. `cpp_callback` lambdas cannot be recovered.
 This is a **single-process** runtime: gRPC, the scheduler, and the worker pool
 share one address space. PostgreSQL is the durable log, not a second executor.
 
+The gRPC runtime uses four persistent PostgreSQL connections, matching its four
+scheduler workers. Each transaction exclusively borrows a pooled connection;
+durable state transitions still commit synchronously. See
+[`docs/persistence-design.md`](docs/persistence-design.md) for the design,
+correctness boundaries, and before/after measurements.
+
 **Why gRPC instead of in-process calls from FastAPI**
 
 The Python API and the C++ scheduler have different lifetimes. gRPC is a

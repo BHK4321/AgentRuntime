@@ -1,23 +1,24 @@
 #pragma once
 
 #include "event_store.hpp"
+#include "postgres_connection_pool.hpp"
 
 #ifdef AGENTOS_ENABLE_POSTGRES
 
 #include <pqxx/pqxx>
-#include <mutex>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 
 class PostgresEventStore final : public EventStore {
 public:
-    explicit PostgresEventStore(const std::string& connection_string)
-        : connection_string_(connection_string) {}
+    explicit PostgresEventStore(const std::string& connection_string,
+                                std::size_t pool_size = 8)
+        : pool_(connection_string, pool_size) {}
 
     void append(const RuntimeEvent& event) override {
-        std::lock_guard lock(mutex_);
-        pqxx::connection connection(connection_string_);
-        pqxx::work transaction(connection);
+        auto connection = pool_.acquire();
+        pqxx::work transaction(connection.connection());
         transaction.exec_params(
             "INSERT INTO runtime_events "
             "(event_type, task_id, worker_id, idempotency_key) "
@@ -45,8 +46,7 @@ private:
         throw std::invalid_argument("unknown event type");
     }
 
-    std::string connection_string_;
-    std::mutex mutex_;
+    PostgresConnectionPool pool_;
 };
 
 #endif

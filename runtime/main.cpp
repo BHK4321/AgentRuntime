@@ -51,7 +51,8 @@ int main() {
         return handlers.create_work(task);
     };
 #ifdef AGENTOS_ENABLE_POSTGRES
-    Scheduler scheduler(graph, 2, std::move(event_sink), {}, std::move(task_sink),
+    Scheduler scheduler(graph, 2, std::move(event_sink), std::chrono::seconds(5),
+                        std::move(task_sink),
                         std::move(task_batch_sink), std::move(task_resolver));
 #else
     Scheduler scheduler(graph, 2, {}, {}, {}, {}, std::move(task_resolver));

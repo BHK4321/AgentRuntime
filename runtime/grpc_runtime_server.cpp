@@ -17,7 +17,7 @@ int main() {
         return 1;
     }
 
-    PostgresRuntimeStore store(connection_string);
+    PostgresRuntimeStore store(connection_string, 4);
     TaskHandlerRegistry handlers;
     handlers.register_handler("sleep", [](const std::string& payload, const TaskContext&) {
         std::this_thread::sleep_for(parse_sleep_duration(payload));

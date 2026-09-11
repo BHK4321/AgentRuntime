@@ -1,27 +1,28 @@
 #pragma once
 
 #include "event_store.hpp"
+#include "postgres_connection_pool.hpp"
 #include "task.hpp"
 
 #ifdef AGENTOS_ENABLE_POSTGRES
 
 #include <pqxx/pqxx>
-#include <mutex>
+#include <cstddef>
 #include <string>
 
 class PostgresRuntimeStore final : public EventStore {
 public:
-    explicit PostgresRuntimeStore(std::string connection_string)
-        : connection_string_(std::move(connection_string)) {}
+    explicit PostgresRuntimeStore(const std::string& connection_string,
+                                  std::size_t pool_size = 8)
+        : pool_(connection_string, pool_size) {}
 
     void persist_task(const Task& task) {
         persist_tasks(std::vector<Task>{task});
     }
 
     void persist_tasks(const std::vector<Task>& tasks) {
-        std::lock_guard lock(mutex_);
-        pqxx::connection connection(connection_string_);
-        pqxx::work transaction(connection);
+        auto connection = pool_.acquire();
+        pqxx::work transaction(connection.connection());
         for (const auto& task : tasks) {
             transaction.exec_params(
                 "INSERT INTO tasks (id, type, payload_json, state, max_attempts, "
@@ -42,9 +43,8 @@ public:
     }
 
     void recover_stale_executions() {
-        std::lock_guard lock(mutex_);
-        pqxx::connection connection(connection_string_);
-        pqxx::work transaction(connection);
+        auto connection = pool_.acquire();
+        pqxx::work transaction(connection.connection());
         // Single-process restart: every RUNNING row belonged to dead workers.
         transaction.exec(
             "WITH stale AS ("
@@ -67,9 +67,8 @@ public:
     }
 
     std::vector<PersistedTask> load_recoverable_tasks() {
-        std::lock_guard lock(mutex_);
-        pqxx::connection connection(connection_string_);
-        pqxx::read_transaction transaction(connection);
+        auto connection = pool_.acquire();
+        pqxx::read_transaction transaction(connection.connection());
         const auto rows = transaction.exec(
             "WITH RECURSIVE recover(id) AS ("
             " SELECT id FROM tasks WHERE type <> 'cpp_callback' "
@@ -107,9 +106,8 @@ public:
     }
 
     void append(const RuntimeEvent& event) override {
-        std::lock_guard lock(mutex_);
-        pqxx::connection connection(connection_string_);
-        pqxx::work transaction(connection);
+        auto connection = pool_.acquire();
+        pqxx::work transaction(connection.connection());
         if (!event.worker_id.empty()) {
             transaction.exec_params(
                 "INSERT INTO workers (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET "
@@ -237,8 +235,7 @@ private:
         return "Unknown";
     }
 
-    std::string connection_string_;
-    std::mutex mutex_;
+    PostgresConnectionPool pool_;
 };
 
 #endif
