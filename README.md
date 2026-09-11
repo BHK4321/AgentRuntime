@@ -18,8 +18,9 @@ C++ scheduler + worker pool     ----->  PostgreSQL
 
 The C++ scheduler supports dependency graphs, FIFO ready-task scheduling,
 concurrent workers, retries, deadlines, cancellation, idempotency metadata,
-heartbeats, leases, and durable task types. The built-in durable handler is
-`sleep`. `cpp_callback` lambdas are process-local and cannot be recovered.
+heartbeats, leases, and durable task types. The built-in durable handlers are
+`sleep`, `text_transform`, and `word_count`. `cpp_callback` lambdas are
+process-local and cannot be recovered.
 
 ## Requirements
 
@@ -61,7 +62,8 @@ AgentOS/
 │   └── requirements.txt
 ├── tests/
 ├── scripts/
-│   └── run-all-tests.ps1             # env + build-grpc + ctest
+│   ├── run-all-tests.ps1             # env + build-grpc + ctest
+│   └── run-durable-benchmark.ps1     # HTTP-to-Postgres benchmark
 └── benchmarks/
 ```
 
@@ -251,7 +253,7 @@ That `ctest` line is the single test entry point. With
 |---|---|
 | In-process scheduler | `dependency_order`, `concurrent_tasks`, `dynamic_submission`, `mixed_submission`, `completed_dependency`, `validation`, `atomic_rejection`, `incremental_validation`, `failure_propagation`, `retry_success`, `retry_exhausted`, `events`, `deadline`, `cancellation`, `lease_expiry`, `lease_renewal`, `cancel_state`, `idempotency`, `task_context`, `durable_events` |
 | Postgres | `postgres_recovery` |
-| gRPC + Postgres | `grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_lease_steal` |
+| gRPC + Postgres | `grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_file_workflow`, `grpc_lease_steal` |
 
 Equivalent CMake target (same directory, same env vars as above):
 
@@ -280,6 +282,10 @@ Optional benchmark (from either tree after a Release build):
 cmake --build AgentOS/build-grpc --config Release --target agentos_benchmark
 .\AgentOS\build-grpc\Release\agentos_benchmark.exe
 ```
+
+This binary measures the scheduler in-process. To measure the complete durable
+HTTP-to-PostgreSQL path, start the full stack and use the script documented in
+**Run the durable benchmark** below.
 
 When the binaries exist, start the processes in **Start each service**.
 
@@ -310,6 +316,7 @@ without it. Keep it in the foreground.
 cd E:\OS
 $env:PATH = "E:\vcpkg\installed\x64-windows\bin;C:\Program Files\PostgreSQL\17\bin;$env:PATH"
 $env:AGENTOS_DATABASE_URL = "postgresql://agentos:agentos@localhost:5432/agentos"
+$env:AGENTOS_WORK_DIR = "E:\OS\AgentOS\work"
 .\AgentOS\build-grpc\Release\agentos_server.exe
 ```
 
@@ -497,13 +504,50 @@ tasks become `Blocked` immediately. A `Running` task stays `Running` until
 the worker observes the cancellation flag, then becomes `Blocked`.
 
 The API validates duplicate IDs, missing dependencies, cycles, supported types
-(`sleep`, `cpp_callback`), and payloads before calling the runtime.
+(`sleep`, `text_transform`, `word_count`, `cpp_callback`), and payloads before
+calling the runtime.
 
 Durable sleep payload:
 
 ```text
 sleep: {"seconds": 2}
 ```
+
+For a file-processing dependency example, including input setup and output
+inspection, see [`docs/file-workflows.md`](docs/file-workflows.md).
+
+---
+
+## Run the durable benchmark
+
+Keep PostgreSQL, `agentos_server`, and FastAPI running, then open another
+PowerShell window:
+
+```powershell
+cd E:\OS\AgentOS
+powershell -ExecutionPolicy Bypass -File .\scripts\run-durable-benchmark.ps1
+```
+
+The default run submits five trials of 100 durable tasks. It prints throughput
+and p95 ready-to-start latency for each trial, reports the medians, and writes:
+
+```text
+benchmarks\results\durable_benchmark_latest.csv
+```
+
+Use larger runs when collecting stable measurements for your project write-up:
+
+```powershell
+.\scripts\run-durable-benchmark.ps1 `
+  -TaskCount 500 `
+  -Trials 10 `
+  -TimeoutSeconds 120
+```
+
+The script defaults to the local API, the `agentos` database credentials shown
+above, and PostgreSQL 17's `psql.exe`. Run `Get-Help
+.\scripts\run-durable-benchmark.ps1` or open the script to see parameters for
+overriding those paths and URLs.
 
 ---
 
@@ -527,8 +571,9 @@ All tasks completed
 
 This binary calls the same recovery helper as `agentos_server`
 (`recover_stale_executions` + `load_recoverable_tasks`). After a gRPC process
-restart, unfinished registered handlers (currently `sleep`) are restored into
-the in-memory graph and resumed. `cpp_callback` lambdas cannot be recovered.
+restart, unfinished registered handlers (`sleep`, `text_transform`, and
+`word_count`) are restored into the in-memory graph and resumed. `cpp_callback`
+lambdas cannot be recovered.
 
 ---
 
@@ -575,7 +620,8 @@ that path exists for tests. In normal operation, renewal is on.
    Heartbeats also extend `lease_expires_at` while the process is alive so live
 rows stay queryable. They are not inserted into `runtime_events` (too chatty);
 worker liveness is `workers.last_heartbeat`.
-3. Registered types (`sleep`) run again. `cpp_callback` is skipped.
+3. Registered durable types (`sleep`, `text_transform`, and `word_count`) run
+   again. `cpp_callback` is skipped.
 
 There is no multi-node membership, so two `agentos_server` processes on one
 database will both try to run the same ready tasks. Run one runtime.
@@ -593,7 +639,8 @@ is extra moving parts without a consumer.
 
 See **6. Run all tests**. The one CTest tree is `AgentOS/build-grpc`. In-process
 scheduler tests are `tests/scheduler_tests.cpp`. Postgres recovery and gRPC
-(`grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_lease_steal`) are
+(`grpc_submit`, `grpc_cancel`, `grpc_recovery`, `grpc_file_workflow`,
+`grpc_lease_steal`) are
 registered in that same tree when CMake is configured with Postgres and gRPC.
 
 ```powershell
