@@ -13,6 +13,7 @@
 #include <thread>
 #ifdef _WIN32
 #include <cstdlib>
+#include <chrono>
 #endif
 
 int main() {
@@ -29,6 +30,23 @@ int main() {
     }
 #endif
 #endif
+
+    // Render may overlap old and new containers during deployment. Keep this
+    // session-level lock for the lifetime of the process so only one runtime
+    // recovers and schedules tasks against this database at a time.
+    pqxx::connection runtime_lease(connection_string);
+    bool waiting_for_lease = false;
+    for (;;) {
+        pqxx::nontransaction transaction(runtime_lease);
+        if (transaction.exec("SELECT pg_try_advisory_lock(1805721413)")[0][0].as<bool>()) {
+            break;
+        }
+        if (!waiting_for_lease) {
+            std::cout << "Waiting for previous AgentOS runtime to stop\n";
+            waiting_for_lease = true;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 
     PostgresRuntimeStore store(connection_string, 4);
     TaskHandlerRegistry handlers;

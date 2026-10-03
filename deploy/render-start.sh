@@ -4,7 +4,7 @@ set -euo pipefail
 : "${AGENTOS_DATABASE_URL:?AGENTOS_DATABASE_URL is required}"
 : "${OLLAMA_API_KEY:?OLLAMA_API_KEY is required}"
 : "${AGENTOS_APP_PASSWORD:?AGENTOS_APP_PASSWORD is required}"
-export AGENTOS_WORK_DIR="${AGENTOS_WORK_DIR:-/var/data}"
+export AGENTOS_WORK_DIR="${AGENTOS_WORK_DIR:-/tmp/agentos-work}"
 export AGENTOS_RUNTIME_ADDRESS="127.0.0.1:50051"
 export AGENTOS_INTERFACE_URL="http://127.0.0.1:8000"
 mkdir -p "$AGENTOS_WORK_DIR"
