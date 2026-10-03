@@ -5,7 +5,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake libpqxx-dev libpq-dev libgrpc++-dev \
-    libprotobuf-dev protobuf-compiler-grpc postgresql-client \
+    libprotobuf-dev protobuf-compiler-grpc postgresql-15 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /app

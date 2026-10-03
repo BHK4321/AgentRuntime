@@ -1,9 +1,10 @@
 # GitHub auto-deploy: Render backend and Vercel frontend
 
-This test deployment uses one Render Docker web service for the Python chat API,
-FastAPI, and C++ runtime, plus Render Postgres. The browser UI is static on Vercel.
-The API and runtime share the container's temporary filesystem for uploads and
-task results.
+This test deployment uses one Render Docker web service for PostgreSQL, the
+Python chat API, FastAPI, and the C++ runtime. The browser UI is static on
+Vercel. PostgreSQL, uploads, and task results all live on the container's
+temporary filesystem. This deployment does not create a Render Postgres
+resource and has no 30-day database expiration.
 Both projects deploy automatically from commits pushed to the connected GitHub
 branch. Local, uncommitted changes are not deployed.
 
@@ -18,16 +19,19 @@ those files. If you use a different production branch, select it in both hosts.
 In Render, connect your GitHub account and create a **Blueprint** from this
 repository's root `render.yaml`. Connecting the GitHub account is important:
 deploying by pasting a public repository URL does not enable Render auto-deploys.
-The Blueprint creates `agentos-backend` and `agentos-db` in Singapore. During
+The Blueprint creates only `agentos-backend` in Singapore. During
 setup, enter `OLLAMA_API_KEY` and a strong `AGENTOS_APP_PASSWORD` in Render's
 secret prompts. The password protects the public chat API; enter it in the UI
 when asked. Do not put it in the repository.
 
-The web service and database use free test plans. Render's free web service
-spins down after inactivity, and its filesystem is erased on restart, spin-down,
-or redeploy. The free Postgres database expires after 30 days. Review these
-limits before relying on this deployment. The service applies
-`database/schema.sql` at startup.
+The web service uses a free test plan. Render's free web service spins down
+after inactivity, and its filesystem is erased on restart, spin-down, or
+redeploy. On each container start, the deployment entrypoint initializes a
+fresh local PostgreSQL cluster, creates the `agentos` database, and applies
+`database/schema.sql`. Existing tasks, documents, and results are lost. A task
+running when the container stops is interrupted, not recovered. The free
+instance has limited memory; if PostgreSQL and the three application processes
+exceed it, use a larger plan or a separate database.
 
 Wait for the Render deployment to become healthy. Copy its HTTPS URL (for
 example, `https://agentos-backend.onrender.com`). The root page on Render also
@@ -57,17 +61,15 @@ Check **All tasks** and **View events** to verify the runtime and database.
 Push a commit to `main`. Render's `autoDeployTrigger: commit` builds and deploys
 the backend from the new commit. Vercel's Git integration deploys the frontend
 from the same commit. A push that only changes the frontend still triggers a
-Render build with this simple configuration. The C++ runtime holds a PostgreSQL
-advisory lock so a new instance waits for the old runtime to stop before it
-starts scheduling. During that handoff, the new chat API may briefly report
-the runtime unavailable. Running tasks may be interrupted and recovered from
-PostgreSQL after the old instance exits.
+Render build with this simple configuration. During a redeploy, Render can run
+old and new containers briefly at the same time. Each has its own temporary
+database, so their tasks and files are separate. After traffic moves to the
+new container, the old tasks and files disappear when it stops.
 
-This is a single-user test deployment. Chat sessions live in memory and reset
-on redeploy; PostgreSQL task records survive, but uploaded documents and file
-results disappear when Render replaces or spins down the container. Old task
-records can therefore point to missing artifacts. Re-upload documents for a
-new test session.
+This is a single-user test deployment. Chat sessions, PostgreSQL task records,
+uploads, and file results reset when Render replaces or spins down the
+container. Re-upload documents for a new test session. Your local development
+setup is unchanged and still uses its configured PostgreSQL service.
 The generated `python_script` handler executes code with the service account's
 permissions, so keep the deployment password private and avoid giving access
 to untrusted users.
