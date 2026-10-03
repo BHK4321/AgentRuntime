@@ -20,6 +20,7 @@
 #endif
 
 namespace script_tasks {
+#ifdef _WIN32
 inline std::wstring widen(const std::string& value) {
     const auto size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
                                           static_cast<int>(value.size()), nullptr, 0);
@@ -48,6 +49,7 @@ inline std::wstring quote_windows_argument(const std::wstring& value) {
     result.push_back(L'"');
     return result;
 }
+#endif
 
 inline void run_python(const std::filesystem::path& runner,
                        const std::filesystem::path& request,
