@@ -4,6 +4,34 @@ let appPassword = sessionStorage.getItem('agentos-app-password') || '';
 let taskView = 'chat';
 let monitorOffset = 0;
 const monitorLimit = 50;
+function requestPassword() {
+  return new Promise((resolve, reject) => {
+    const dialog = $('auth-dialog');
+    const form = $('auth-form');
+    const input = $('auth-password');
+    input.value = '';
+    dialog.showModal();
+    input.focus();
+    const finish = () => {
+      form.removeEventListener('submit', submit);
+      dialog.removeEventListener('cancel', cancel);
+      dialog.close();
+    };
+    const submit = (event) => {
+      event.preventDefault();
+      const value = input.value;
+      finish();
+      value ? resolve(value) : reject(new Error('Deployment password is required.'));
+    };
+    const cancel = (event) => {
+      event.preventDefault();
+      finish();
+      reject(new Error('Deployment password is required. Reload to try again.'));
+    };
+    form.addEventListener('submit', submit);
+    dialog.addEventListener('cancel', cancel);
+  });
+}
 async function api(path, options = {}) {
   const send = () => {
     const headers = {...options.headers};
@@ -13,9 +41,7 @@ async function api(path, options = {}) {
   };
   let response = await send();
   if (response.status === 401) {
-    const entered = window.prompt('Enter your AgentOS deployment password:');
-    if (!entered) throw new Error('Deployment password is required. Reload to try again.');
-    appPassword = entered;
+    appPassword = await requestPassword();
     sessionStorage.setItem('agentos-app-password', appPassword);
     response = await send();
     if (response.status === 401) {

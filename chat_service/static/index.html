@@ -6,16 +6,17 @@
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/markdown.css">
   <link rel="stylesheet" href="/static/monitor.css">
+  <link rel="stylesheet" href="/static/auth.css">
   <script src="/static/markdown.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/">A<span>AgentOS<small>LOCAL WORKSPACE</small></span></a>
+    <a class="brand" href="/">A<span>AgentOS<small>RUNTIME WORKSPACE</small></span></a>
     <button id="new-chat" class="new-chat">＋ New conversation</button>
     <div class="sidebar-label">WORKSPACE</div>
     <div class="nav-active">◌ &nbsp; Runtime assistant</div>
-    <div class="sidebar-bottom"><span class="dot"></span> Local service<br><small>Inference powered by Ollama Cloud</small></div>
+    <div class="sidebar-bottom"><span class="dot"></span> AgentOS runtime<br><small>Inference powered by Ollama Cloud</small></div>
   </aside>
   <main>
     <header><div><strong>Runtime assistant</strong><span class="separator">/</span><span>Chat</span></div><span class="model" id="model">Connecting…</span></header>
@@ -40,5 +41,6 @@
   </main>
   <aside class="activity"><div class="activity-heading"><strong>Runtime activity</strong><span id="task-count">0</span></div><div class="monitor-tabs"><button id="view-chat" class="selected" type="button">This chat</button><button id="view-all" type="button">All tasks</button></div><p id="activity-description">Follow the work, from submission to result.</p><div id="tasks"><div class="empty-state">No tasks yet.<br><small>Submitted tasks will appear here.</small></div></div><div id="monitor-pages" class="monitor-pages" hidden><button id="monitor-prev" type="button">Previous</button><span id="monitor-page"></span><button id="monitor-next" type="button">Next</button></div></aside>
   <dialog id="artifact"><div class="dialog-heading"><strong>Task result</strong><button id="close-artifact" aria-label="Close result">✕</button></div><pre id="artifact-content"></pre></dialog>
+  <dialog id="auth-dialog"><form id="auth-form"><h2>Enter your deployment password</h2><p>This password protects your AgentOS chat and runtime.</p><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="current-password" required><button type="submit">Connect</button></form></dialog>
 </body>
 </html>

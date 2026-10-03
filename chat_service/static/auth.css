@@ -1,0 +1,30 @@
+#auth-dialog {
+  width: min(420px, 90vw);
+}
+#auth-form {
+  display: grid;
+  gap: 14px;
+}
+#auth-form h2, #auth-form p {
+  margin: 0;
+}
+#auth-form h2 {
+  font: 700 21px Manrope, sans-serif;
+}
+#auth-form p, #auth-form label {
+  font-size: 14px;
+}
+#auth-form input {
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #b5c4b2;
+  border-radius: 7px;
+  font: inherit;
+}
+#auth-form button {
+  justify-self: end;
+  border-radius: 7px;
+  padding: 10px 18px;
+  background: #234b3b;
+  color: white;
+}
