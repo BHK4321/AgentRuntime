@@ -62,7 +62,9 @@ async def app_password(request: Request, call_next):
             credentials, scheme = "", ""
         expected = "agentos:" + password
         if scheme.lower() != "basic" or not hmac.compare_digest(credentials, expected):
-            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="AgentOS"'})
+            # The browser handles this 401 with the in-page password form.
+            # A Basic challenge header would open a browser-managed login prompt.
+            return Response(status_code=401)
     return await call_next(request)
 
 

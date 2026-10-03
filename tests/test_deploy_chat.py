@@ -12,7 +12,9 @@ class DeploymentAccessTests(unittest.TestCase):
         with patch.dict(os.environ, {"AGENTOS_APP_PASSWORD": "demo-secret"}):
             with TestClient(app) as client:
                 self.assertEqual(client.get("/health").status_code, 200)
-                self.assertEqual(client.get("/").status_code, 401)
+                unauthenticated = client.get("/")
+                self.assertEqual(unauthenticated.status_code, 401)
+                self.assertNotIn("www-authenticate", unauthenticated.headers)
                 self.assertEqual(client.get("/", auth=("agentos", "wrong")).status_code, 401)
                 self.assertEqual(client.get("/", auth=("agentos", "demo-secret")).status_code, 200)
 
