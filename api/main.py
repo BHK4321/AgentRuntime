@@ -6,17 +6,19 @@ from typing import Any
 
 import psycopg
 import grpc
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 from .grpc_runtime_client import RuntimeClient
+from .documents import create_document_router
+from script_worker.contracts import ScriptPayload
 
 DATABASE_URL = os.getenv(
     "AGENTOS_DATABASE_URL",
     "postgresql://agentos:agentos@localhost:5432/agentos",
 )
 RUNTIME_ADDRESS = os.getenv("AGENTOS_RUNTIME_ADDRESS", "127.0.0.1:50051")
-SUPPORTED_TYPES = {"sleep", "text_transform", "word_count", "cpp_callback"}
+SUPPORTED_TYPES = {"sleep", "text_transform", "word_count", "cpp_callback", "python_script"}
 TERMINAL_STATES = {"Completed", "Failed", "Blocked"}
 
 app = FastAPI(title="AgentOS API", version="0.1.0")
@@ -63,6 +65,9 @@ def database():
         connection.close()
 
 
+app.include_router(create_document_router(database))
+
+
 def validate_workflow(tasks: list[TaskRequest], existing_ids: set[str]) -> None:
     ids = [task.id for task in tasks]
     incoming = set(ids)
@@ -76,6 +81,13 @@ def validate_workflow(tasks: list[TaskRequest], existing_ids: set[str]) -> None:
         )
 
     for task in tasks:
+        if task.type == "python_script":
+            try:
+                ScriptPayload.model_validate(task.payload)
+            except ValueError as error:
+                raise HTTPException(422, "invalid python_script payload: " + str(error)) from error
+            if task.max_attempts != 1:
+                raise HTTPException(422, "script tasks use one execution attempt; submit corrected code as a new task")
         if task.type not in SUPPORTED_TYPES:
             raise HTTPException(
                 status_code=422,
@@ -207,6 +219,37 @@ def submit_workflow(workflow: WorkflowRequest) -> dict[str, Any]:
     except grpc.RpcError as error:
         raise HTTPException(status_code=503, detail=f"runtime unavailable: {error.code().name}") from error
     return {"task_ids": task_ids}
+
+
+@app.get("/tasks")
+def list_tasks(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)) -> dict[str, Any]:
+    with database() as connection:
+        total = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        rows = connection.execute(
+            "SELECT id, type, state, attempts, max_attempts, created_at, updated_at "
+            "FROM tasks ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+            (limit, offset),
+        ).fetchall()
+        ids = [row[0] for row in rows]
+        dependencies = defaultdict(list)
+        if ids:
+            for task_id, dependency_id in connection.execute(
+                "SELECT task_id, dependency_id FROM task_dependencies "
+                "WHERE task_id = ANY(%s) ORDER BY task_id, dependency_id",
+                (ids,),
+            ):
+                dependencies[task_id].append(dependency_id)
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "tasks": [
+            {"id": row[0], "type": row[1], "state": row[2], "attempts": row[3],
+             "max_attempts": row[4], "created_at": row[5], "updated_at": row[6],
+             "dependencies": dependencies[row[0]]}
+            for row in rows
+        ],
+    }
 
 
 @app.get("/tasks/{task_id}")

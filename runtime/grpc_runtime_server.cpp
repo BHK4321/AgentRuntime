@@ -1,5 +1,6 @@
 #include "grpc_runtime_service.hpp"
 #include "file_task_handlers.hpp"
+#include "script_task_handlers.hpp"
 #include "postgres_runtime_store.hpp"
 #include "scheduler.hpp"
 #include "task_handler_registry.hpp"
@@ -10,6 +11,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
+#ifdef _WIN32
+#include <cstdlib>
+#endif
 
 int main() {
     const auto* connection_string = std::getenv("AGENTOS_DATABASE_URL");
@@ -18,12 +22,21 @@ int main() {
         return 1;
     }
 
+#ifdef _WIN32
+#ifdef AGENTOS_PYTHON_RUNNER_PATH
+    if (std::getenv("AGENTOS_SCRIPT_RUNNER") == nullptr) {
+        _putenv_s("AGENTOS_SCRIPT_RUNNER", AGENTOS_PYTHON_RUNNER_PATH);
+    }
+#endif
+#endif
+
     PostgresRuntimeStore store(connection_string, 4);
     TaskHandlerRegistry handlers;
     handlers.register_handler("sleep", [](const std::string& payload, const TaskContext&) {
         std::this_thread::sleep_for(parse_sleep_duration(payload));
     });
     file_tasks::register_handlers(handlers);
+    script_tasks::register_handlers(handlers);
 
     TaskGraph graph;
     restore_runtime_graph(graph, store, handlers);

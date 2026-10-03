@@ -11,6 +11,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 enable_testing()
 
+add_executable(agentos_script_bridge_tests tests/script_bridge_tests.cpp)
+target_include_directories(agentos_script_bridge_tests PRIVATE runtime)
+add_test(NAME script_bridge COMMAND agentos_script_bridge_tests)
+set_tests_properties(script_bridge PROPERTIES TIMEOUT 10)
+
 option(AGENTOS_ENABLE_POSTGRES "Enable the libpqxx PostgreSQL event store" OFF)
 option(AGENTOS_ENABLE_GRPC "Build the gRPC runtime service" OFF)
 
@@ -70,6 +75,8 @@ if(AGENTOS_ENABLE_GRPC)
         ${AGENTOS_PROTO_DIR}/agentos.grpc.pb.cc
     )
     target_include_directories(agentos_server PRIVATE runtime ${AGENTOS_PROTO_DIR})
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/script_worker/direct_runner.py" AGENTOS_PYTHON_RUNNER_PATH)
+    target_compile_definitions(agentos_server PRIVATE AGENTOS_PYTHON_RUNNER_PATH="${AGENTOS_PYTHON_RUNNER_PATH}")
     target_link_libraries(agentos_server PRIVATE gRPC::grpc++)
     target_compile_options(agentos_server PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -178,7 +185,7 @@ endif()
 # Single CTest entry point for this build tree. Configure with
 # AGENTOS_ENABLE_POSTGRES=ON and AGENTOS_ENABLE_GRPC=ON (AgentOS/build-grpc)
 # to register in-process, Postgres, and gRPC tests together.
-set(AGENTOS_TEST_ALL_DEPS agentos_tests)
+set(AGENTOS_TEST_ALL_DEPS agentos_tests agentos_script_bridge_tests)
 if(AGENTOS_ENABLE_GRPC)
     list(APPEND AGENTOS_TEST_ALL_DEPS agentos_grpc_tests)
 endif()

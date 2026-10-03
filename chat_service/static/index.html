@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS · Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/markdown.css">
+  <link rel="stylesheet" href="/static/monitor.css">
+  <script src="/static/markdown.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/">A<span>AgentOS<small>LOCAL WORKSPACE</small></span></a>
+    <button id="new-chat" class="new-chat">＋ New conversation</button>
+    <div class="sidebar-label">WORKSPACE</div>
+    <div class="nav-active">◌ &nbsp; Runtime assistant</div>
+    <div class="sidebar-bottom"><span class="dot"></span> Local service<br><small>Inference powered by Ollama Cloud</small></div>
+  </aside>
+  <main>
+    <header><div><strong>Runtime assistant</strong><span class="separator">/</span><span>Chat</span></div><span class="model" id="model">Connecting…</span></header>
+    <div id="notice" role="status" hidden></div>
+    <section id="messages" aria-live="polite" aria-label="Conversation">
+      <div id="welcome">
+        <div class="eyebrow">YOUR WORDS. YOUR RUNTIME.</div>
+        <h1>What shall we work on?</h1>
+      <p>Give your runtime a task in plain language.<br>Upload a document or try a small test workflow.</p>
+        <div class="suggestions">
+          <button data-prompt="Run a two-second test task and check its status."><span>01</span><strong>Test the connection</strong><small>Run a short task through AgentOS ↗</small></button>
+          <button data-prompt="Count the words, lines, and bytes in my uploaded document."><span>02</span><strong>Explore a document</strong><small>Upload a document, then count its words ↗</small></button>
+          <button data-prompt="Convert my uploaded document to uppercase, then count the words in the converted file."><span>03</span><strong>Build a workflow</strong><small>Chain a text transform and word count ↗</small></button>
+        </div>
+      </div>
+    </section>
+    <div class="compose-area">
+      <div id="attachments"></div>
+      <form id="chat-form"><label class="sr-only" for="prompt">Message</label><textarea id="prompt" rows="2" placeholder="Ask AgentOS to do something…" maxlength="8000" required></textarea><div class="compose-toolbar"><button type="button" class="attach" id="attach">＋ Attach document</button><input type="file" id="file" accept=".txt,.md,.csv,.json,.xml,.html,.htm,.pdf,.docx,.xlsx,.pptx" hidden><span>Common text and Office formats · up to 10 MiB</span><button id="send" type="submit">Send ↑</button></div></form>
+      <p class="footnote">AgentOS extracts text from supported documents for scripts. Requested previews and results are shared with Ollama Cloud.</p>
+    </div>
+  </main>
+  <aside class="activity"><div class="activity-heading"><strong>Runtime activity</strong><span id="task-count">0</span></div><div class="monitor-tabs"><button id="view-chat" class="selected" type="button">This chat</button><button id="view-all" type="button">All tasks</button></div><p id="activity-description">Follow the work, from submission to result.</p><div id="tasks"><div class="empty-state">No tasks yet.<br><small>Submitted tasks will appear here.</small></div></div><div id="monitor-pages" class="monitor-pages" hidden><button id="monitor-prev" type="button">Previous</button><span id="monitor-page"></span><button id="monitor-next" type="button">Next</button></div></aside>
+  <dialog id="artifact"><div class="dialog-heading"><strong>Task result</strong><button id="close-artifact" aria-label="Close result">✕</button></div><pre id="artifact-content"></pre></dialog>
+</body>
+</html>

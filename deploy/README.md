@@ -1,0 +1,66 @@
+# GitHub auto-deploy: Render backend and Vercel frontend
+
+This test deployment uses one Render Docker web service for the Python chat API,
+FastAPI, and C++ runtime, plus Render Postgres. The browser UI is static on Vercel.
+The API and runtime share one persistent Render disk for uploads and task results.
+Both projects deploy automatically from commits pushed to the connected GitHub
+branch. Local, uncommitted changes are not deployed.
+
+## 1. Push this code to GitHub
+
+Commit the deployment files and the current AgentOS implementation, then push
+to `main`. Do not commit `.env` files or API keys. The root `.gitignore` excludes
+those files. If you use a different production branch, select it in both hosts.
+
+## 2. Create the Render backend
+
+In Render, connect your GitHub account and create a **Blueprint** from this
+repository's root `render.yaml`. Connecting the GitHub account is important:
+deploying by pasting a public repository URL does not enable Render auto-deploys.
+The Blueprint creates `agentos-backend` and `agentos-db` in Singapore. During
+setup, enter `OLLAMA_API_KEY` and a strong `AGENTOS_APP_PASSWORD` in Render's
+secret prompts. The password protects the public chat API; enter it in the UI
+when asked. Do not put it in the repository.
+
+The web service uses a paid `1c-2g` plan because its persistent disk requires
+a paid service. The database is configured with a free test plan. Review the
+plans in `render.yaml` before creating the Blueprint if you want different
+capacity or persistence. The service applies `database/schema.sql` at startup.
+
+Wait for the Render deployment to become healthy. Copy its HTTPS URL (for
+example, `https://agentos-backend.onrender.com`). The root page on Render also
+serves the UI for a direct backend smoke test; it requires the password.
+
+## 3. Create the Vercel frontend
+
+Import the **same GitHub repository** into Vercel. Set its Root Directory to
+`chat_service/static` and its Framework Preset to **Other**. Add an environment
+variable named `AGENTOS_BACKEND_URL` with the Render HTTPS origin, without a
+trailing slash. Deploy. `vercel.mjs` serves the static UI and rewrites `/api/*`
+to the Render chat service; the Ollama key stays on Render.
+
+Copy the Vercel production URL. In the Render service's Environment settings,
+set `AGENTOS_FRONTEND_ORIGIN` to that exact origin, for example
+`https://agentos-frontend.vercel.app`, with no trailing slash or path. Save and
+redeploy Render. This allows browser writes from that Vercel origin while
+rejecting unrelated origins. Vercel preview URLs need their own allowed origin;
+the production URL is sufficient for this test setup.
+
+Open the Vercel URL, enter `AGENTOS_APP_PASSWORD` when prompted, and submit a
+two-second sleep task. The browser keeps the password only in session storage.
+Check **All tasks** and **View events** to verify the runtime and database.
+
+## Updates
+
+Push a commit to `main`. Render's `autoDeployTrigger: commit` builds and deploys
+the backend from the new commit. Vercel's Git integration deploys the frontend
+from the same commit. A push that only changes the frontend still triggers a
+Render build with this simple configuration. The persistent disk prevents
+overlapping Render runtime instances during redeploy; running tasks may be
+interrupted and recovered from PostgreSQL.
+
+This is a single-user test deployment. Chat sessions live in memory and reset
+on redeploy; PostgreSQL tasks survive, and the persistent disk retains files.
+The generated `python_script` handler executes code with the service account's
+permissions, so keep the deployment password private and avoid giving access
+to untrusted users.

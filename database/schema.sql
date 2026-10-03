@@ -1,3 +1,13 @@
+-- File contents live in AGENTOS_WORK_DIR, shared by the API and runtime.
+-- Task payload input_path/output_path reference relative paths in that directory.
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL DEFAULT 'cpp_callback',

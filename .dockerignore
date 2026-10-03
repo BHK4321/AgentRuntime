@@ -1,0 +1,16 @@
+.git
+.env
+**/.env
+**/.env.*
+!**/.env.example
+.venv
+**/.venv
+build
+build-*
+work
+**/__pycache__
+**/*.pyc
+node_modules
+docs
+*.events
+*.eventlog

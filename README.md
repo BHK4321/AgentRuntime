@@ -1,5 +1,8 @@
 # AgentOS
 
+For GitHub-backed automatic deployment with a Vercel frontend and Render
+backend, see [deploy/README.md](deploy/README.md).
+
 AgentOS is a local C++ execution runtime for dependency-aware, concurrent task
 workflows. PostgreSQL stores task definitions, dependencies, execution attempts,
 worker heartbeats, leases, and runtime events. A FastAPI service is the HTTP
@@ -9,6 +12,16 @@ front door and submits work to the C++ runtime over gRPC.
 
 The diagram shows the live request path, process boundaries, durable storage,
 file-task sandbox, connection pool, and lease-based crash recovery.
+
+## Local LLM chat
+
+A separate browser chat service in [`chat_service/`](chat_service/README.md)
+connects Ollama Cloud to the AgentOS HTTP API. It runs locally on port 8080,
+supports text uploads and runtime task tracking, and keeps cloud credentials
+in `chat_service/.env`. See its README for setup and the document storage flow.
+For model-generated Python operations on documents, enable the separate
+[Python script handler](script_worker/README.md). It executes `python_script`
+tasks as child processes of the runtime worker.
 
 ## Architecture
 
@@ -27,7 +40,7 @@ heartbeats, leases, and durable task types. The built-in durable handlers are
 `sleep`, `text_transform`, and `word_count`. `cpp_callback` lambdas are
 process-local and cannot be recovered.
 
-## Requirements
+## Windows full-stack requirements
 
 - Windows PowerShell
 - CMake 3.20 or newer
@@ -37,11 +50,63 @@ process-local and cannot be recovered.
 - Python 3.11
 - `curl.exe` (included with current Windows)
 
-All commands below assume the workspace root:
+The Windows full-stack commands below assume the workspace root:
 
 ```powershell
 cd E:\OS
 ```
+
+## Build and test on Linux / WSL2 (core runtime)
+
+In WSL2, the Windows repository at `E:\OS\AgentOS` is available at
+`/mnt/e/OS/AgentOS`. The commands in this section build and test the core
+scheduler, runtime demo, and benchmark. The PostgreSQL and gRPC full-stack
+instructions later in this document are currently Windows-oriented.
+
+Install the Linux development tools once:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake ninja-build gdb git
+```
+
+Configure, compile, and run the core test suite:
+
+```bash
+cd /mnt/e/OS/AgentOS
+cmake -S . -B build-linux -G Ninja
+cmake --build build-linux
+ctest --test-dir build-linux --output-on-failure
+```
+
+This builds `agentos`, `agentos_tests`, and `agentos_benchmark`. The core suite
+currently contains 20 tests covering dependency ordering, concurrent and
+dynamic submission, validation, failure propagation, retries, deadlines,
+cancellation, leases, idempotency, runtime context, and durable event replay.
+
+Run an individual binary when needed:
+
+```bash
+./build-linux/agentos
+./build-linux/agentos_tests
+./build-linux/agentos_benchmark
+```
+
+Building under `/mnt/e` keeps one source tree accessible from Windows and
+WSL2. For faster Linux filesystem performance, clone the committed repository
+into the WSL2 home directory:
+
+```bash
+mkdir -p ~/projects
+git clone /mnt/e/OS/AgentOS ~/projects/AgentOS
+cd ~/projects/AgentOS
+cmake -S . -B build-linux -G Ninja
+cmake --build build-linux
+ctest --test-dir build-linux --output-on-failure
+```
+
+The local clone contains committed changes only. Commit or otherwise transfer
+uncommitted work before using this option.
 
 ## Repository Layout
 

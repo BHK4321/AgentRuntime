@@ -1,0 +1,20 @@
+.message.assistant .message-content{white-space:normal;min-width:0}
+.markdown{line-height:1.7;overflow-wrap:anywhere}
+.markdown>:first-child{margin-top:0}
+.markdown>:last-child{margin-bottom:0}
+.markdown p{margin:0 0 12px}
+.markdown h1,.markdown h2,.markdown h3,.markdown h4,.markdown h5,.markdown h6{font-family:Manrope,sans-serif;letter-spacing:normal;line-height:1.35;color:#234b3b;margin:23px 0 10px}
+.markdown h1{font-size:22px}.markdown h2{font-size:19px}.markdown h3{font-size:16px}.markdown h4,.markdown h5,.markdown h6{font-size:14px}
+.markdown ul,.markdown ol{margin:6px 0 14px;padding-left:25px}
+.markdown li{padding-left:2px;margin:3px 0}
+.markdown blockquote{border-left:3px solid #a8bea0;background:#f3f7ef;padding:10px 16px;margin:12px 0;color:#3d5141}
+.markdown blockquote>:first-child{margin-top:0}.markdown blockquote>:last-child{margin-bottom:0}
+.markdown code{font:12px/1.5 Consolas,'Courier New',monospace;background:#edf2ea;border-radius:4px;padding:2px 5px;white-space:break-spaces}
+.markdown pre{max-height:none;overflow:auto;white-space:pre;margin:10px 0 16px;padding:15px;background:#223129;color:#edf5e9;border-radius:8px;font:12px/1.6 Consolas,'Courier New',monospace}
+.markdown pre code{padding:0;background:transparent;color:inherit;white-space:pre;font:inherit}
+.markdown a{color:#28644c;text-decoration:underline;text-underline-offset:2px}
+.markdown-table-wrap{max-width:100%;overflow-x:auto;margin:12px 0 16px;border:1px solid #dce5d7;border-radius:7px}
+.markdown table{width:100%;border-collapse:collapse;white-space:normal;font-size:12px;min-width:max-content}
+.markdown th,.markdown td{padding:9px 12px;border-bottom:1px solid #e2e9dd;vertical-align:top}
+.markdown th{background:#edf3e9;font-weight:700}.markdown tr:last-child td{border-bottom:0}
+.markdown hr{border:0;border-top:1px solid #dce5d7;margin:20px 0}

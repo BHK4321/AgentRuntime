@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: agentos-backend
+    runtime: docker
+    plan: 1c-2g
+    region: singapore
+    numInstances: 1
+    autoDeployTrigger: commit
+    healthCheckPath: /health
+    disk:
+      name: agentos-files
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: AGENTOS_DATABASE_URL
+        fromDatabase:
+          name: agentos-db
+          property: connectionString
+      - key: AGENTOS_WORK_DIR
+        value: /var/data
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: AGENTOS_APP_PASSWORD
+        sync: false
+      - key: OLLAMA_MODEL
+        value: gpt-oss:20b
+
+databases:
+  - name: agentos-db
+    databaseName: agentos
+    user: agentos
+    plan: free
+    region: singapore
+    ipAllowList: []
