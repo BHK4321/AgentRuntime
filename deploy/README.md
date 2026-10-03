@@ -40,10 +40,11 @@ serves the UI for a direct backend smoke test; it requires the password.
 ## 3. Create the Vercel frontend
 
 Import the **same GitHub repository** into Vercel. Set its Root Directory to
-`chat_service/static` and its Framework Preset to **Other**. Add an environment
-variable named `AGENTOS_BACKEND_URL` with the Render HTTPS origin, without a
-trailing slash. Deploy. `vercel.mjs` serves the static UI and rewrites `/api/*`
-to the Render chat service; the Ollama key stays on Render.
+`chat_service/static` and its Framework Preset to **Other**. Set the Render
+HTTPS origin in `chat_service/static/vercel.json`, then deploy. That file serves
+the static UI and rewrites `/api/*` to the Render chat service; the Ollama key
+stays on Render. If Render assigns a different URL, update the rewrite target
+and push the change to `main` before deploying the frontend.
 
 Copy the Vercel production URL. In the Render service's Environment settings,
 set `AGENTOS_FRONTEND_ORIGIN` to that exact origin, for example
