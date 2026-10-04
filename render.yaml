@@ -15,4 +15,4 @@ services:
       - key: AGENTOS_APP_PASSWORD
         sync: false
       - key: OLLAMA_MODEL
-        value: gpt-oss:20b
+        value: gpt-oss:120b
